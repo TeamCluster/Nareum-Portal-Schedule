@@ -2,11 +2,33 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>대관 신청</title>
+    <title>{{ SERVICE_NAME }}</title>
 </head>
 <body>
-    <h1>준비 중</h1>
-    <p>현재 대관 신청 페이지는 준비 중입니다.</p>
+    <h1>{{ SERVICE_NAME }}</h1>
+
+    <form method="get" action="/">
+        <label>날짜 선택: <input type="date" name="date"></label>
+        <label>시설 선택: 
+            <select name="facility_type">
+                <option value="전체">전체</option>
+                <option value="연습실">연습실</option>
+                <option value="회의실">회의실</option>
+            </select>
+        </label>
+        <button type="submit">조회하기</button>
+    </form>
+
+    <h2>예약 가능 시설 목록</h2>
+    <ul>
+        {% for f in facilities %}
+        <li>
+            {{ f.name }}
+            <form method="post" action="{{ url_for('reserve', facility_id=f.id) }}">
+                <button type="submit">대여하기</button>
+            </form>
+        </li>
+        {% endfor %}
+    </ul>
 </body>
 </html>
