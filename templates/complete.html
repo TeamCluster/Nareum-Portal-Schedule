@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>예약 완료</title>
+</head>
+<body>
+    <h1>예약 완료</h1>
+    <p>{{ reservation.applicant_name }}님의 예약이 정상적으로 접수되었습니다.</p>
+    <p>시설: {{ reservation.facility.name }}</p>
+    <p>날짜: {{ reservation.start_time.strftime('%Y-%m-%d') }}</p>
+    <p>시간: {{ reservation.start_time.strftime('%H:%M') }} ~ {{ reservation.end_time.strftime('%H:%M') }}</p>
+
+    <form action="{{ url_for('index') }}">
+        <button type="submit">메인으로 돌아가기</button>
+    </form>
+</body>
+</html>

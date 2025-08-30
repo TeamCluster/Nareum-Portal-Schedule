@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>예약 신청</title>
+    <script>
+        function toggleSubmit() {
+            const checkbox = document.getElementById("agree");
+            const button = document.getElementById("submitBtn");
+            button.disabled = !checkbox.checked;
+        }
+    </script>
+</head>
+<body>
+    <h1>예약 신청서</h1>
+    <p>예약 날짜: {{ selected_date }}</p>
+
+    <form method="post" onsubmit="return validateForm()">
+        <h2>1. 신청인 정보</h2>
+        이름: <input type="text" name="name" required><br>
+        연락처: <input type="text" name="contact" required><br>
+        소속: <input type="text" name="school"><br>
+        동아리: <input type="text" name="club"><br>
+
+        <h2>2. 이용 일정 선택</h2>
+        시작: 
+        <select name="start_time">
+            {% for h in range(9,18) %}
+            <option value="{{'%02d:00' % h}}">{{h}}시</option>
+            {% endfor %}
+        </select>
+        종료: 
+        <select name="end_time">
+            {% for h in range(10,19) %}
+            <option value="{{'%02d:00' % h}}">{{h}}시</option>
+            {% endfor %}
+        </select><br>
+
+        <h2>3. 이용 인원</h2>
+        초등: <input type="number" name="elementary" value="0"><br>
+        중등: <input type="number" name="middle" value="0"><br>
+        고등: <input type="number" name="high" value="0"><br>
+        후기청소년: <input type="number" name="teen" value="0"><br>
+        성인: <input type="number" name="adult" value="0"><br>
+
+        <h2>4. 필요 물품</h2>
+        <input type="checkbox" name="equipment" value="앰프"> 앰프
+        <input type="checkbox" name="equipment" value="스피커"> 스피커
+        <input type="checkbox" name="equipment" value="마이크"> 마이크
+        <input type="checkbox" name="equipment" value="키보드"> 키보드<br>
+
+        <h2>5. 공지 및 준수사항</h2>
+        <p>asdf</p>
+        <label>
+            <input type="checkbox" id="agree" name="agree" value="1" onchange="toggleSubmit()">
+            위 준수사항에 동의합니다
+        </label><br>
+
+        <button id="submitBtn" type="submit" disabled>예약 신청하기</button>
+    </form>
+
+    <script>
+    function toggleSubmit() {
+        const checkbox = document.getElementById("agree");
+        const button = document.getElementById("submitBtn");
+        button.disabled = !checkbox.checked;
+    }
+
+    function validateForm() {
+        const start = document.querySelector("select[name='start_time']").value;
+        const end = document.querySelector("select[name='end_time']").value;
+
+        if (start >= end) {
+            alert("종료 시간이 시작 시간보다 늦어야 합니다.");
+            return false; // 제출 막기
+        }
+        return true; // 정상 제출
+    }
+    </script>
+</body>
+</html>

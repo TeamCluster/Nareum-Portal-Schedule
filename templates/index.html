@@ -1,12 +1,47 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>대관 신청</title>
-</head>
-<body>
-    <h1>준비 중</h1>
-    <p>현재 대관 신청 페이지는 준비 중입니다.</p>
-</body>
-</html>
+<h1>{{ SERVICE_NAME }}</h1>
+<form id="searchForm" method="get" action="/">
+    <label>날짜 선택: <input type="date" name="date" id="dateInput"></label>
+    <label>시설 선택: 
+        <select name="facility_type">
+            <option value="전체">전체</option>
+            <option value="연습실">연습실</option>
+            <option value="회의실">회의실</option>
+        </select>
+    </label>
+    <button type="submit">조회하기</button>
+</form>
+
+<h2>예약 가능 시설 목록</h2>
+<ul>
+    {% for f in facilities %}
+    <li>
+        {{ f.name }}
+        <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}" onsubmit="return checkDate(this)">
+            <input type="hidden" name="date" id="hiddenDate">
+            <button type="submit">대여하기</button>
+        </form>
+    </li>
+    {% endfor %}
+</ul>
+
+<script>
+function checkDate(form){
+    const dateInput = document.getElementById("dateInput").value;
+    if(!dateInput){
+        alert("예약할 날짜를 선택해주세요.");
+        return false;
+    }
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const standard = new Date(today);
+    standard.setDate(standard.getDate() + 1);
+
+    const selected = new Date(dateInput);
+    if(selected < standard){
+        alert("예약 날짜는 최소 하루 뒤 부터 가능합니다.");
+        return false;
+    }
+    form.querySelector("#hiddenDate").value = dateInput;
+    return true;
+}
+</script>
