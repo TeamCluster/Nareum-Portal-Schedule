@@ -13,8 +13,9 @@
 </head>
 <body>
     <h1>예약 신청서</h1>
+    <p>예약 날짜: {{ selected_date }}</p>
 
-    <form method="post">
+    <form method="post" onsubmit="return validateForm()">
         <h2>1. 신청인 정보</h2>
         이름: <input type="text" name="name" required><br>
         연락처: <input type="text" name="contact" required><br>
@@ -58,14 +59,23 @@
         <button id="submitBtn" type="submit" disabled>예약 신청하기</button>
     </form>
 
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul>
-        {% for msg in messages %}
-          <li>{{ msg }}</li>
-        {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
+    <script>
+    function toggleSubmit() {
+        const checkbox = document.getElementById("agree");
+        const button = document.getElementById("submitBtn");
+        button.disabled = !checkbox.checked;
+    }
+
+    function validateForm() {
+        const start = document.querySelector("select[name='start_time']").value;
+        const end = document.querySelector("select[name='end_time']").value;
+
+        if (start >= end) {
+            alert("종료 시간이 시작 시간보다 늦어야 합니다.");
+            return false; // 제출 막기
+        }
+        return true; // 정상 제출
+    }
+    </script>
 </body>
 </html>
