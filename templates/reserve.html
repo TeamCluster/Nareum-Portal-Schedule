@@ -3,58 +3,105 @@
 <head>
     <meta charset="UTF-8">
     <title>예약 신청</title>
-    <script>
-        function toggleSubmit() {
-            const checkbox = document.getElementById("agree");
-            const button = document.getElementById("submitBtn");
-            button.disabled = !checkbox.checked;
+    <style>
+        /* 뼈대만 잡는 간단한 스타일 */
+        .time-grid {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
         }
-    </script>
+        .time-slot {
+            border: 1px solid #ccc;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+        }
+        .time-slot input {
+            display: none; /* 체크박스 숨기고 라벨 클릭 유도 */
+        }
+        .time-slot.disabled {
+            background-color: #eee;
+            color: #aaa;
+            cursor: not-allowed;
+        }
+        .time-slot.selected {
+            background-color: #aaddff;
+        }
+        /* 체크박스가 체크되면 배경색 변경 (CSS로만 처리) */
+        .time-slot input:checked + span {
+            font-weight: bold;
+            color: blue;
+        }
+    </style>
 </head>
 <body>
     <h1>예약 신청서</h1>
-    <p>예약 날짜: {{ selected_date }}</p>
+    <p><strong>시설명:</strong> {{ facility.name }}</p>
+    <p><strong>예약 날짜:</strong> {{ selected_date }}</p>
 
-    <form method="post" onsubmit="return validateForm()">
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul style="color: red;">
+        {% for message in messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <form method="post">
+        <hr>
         <h2>1. 신청인 정보</h2>
         이름: <input type="text" name="name" required><br>
-        연락처: <input type="text" name="contact" required><br>
+        연락처: <input type="text" name="contact" required placeholder="010-0000-0000"><br>
         소속: <input type="text" name="school"><br>
         동아리: <input type="text" name="club"><br>
 
-        <h2>2. 이용 일정 선택</h2>
-        시작: 
-        <select name="start_time">
-            {% for h in range(9,18) %}
-            <option value="{{'%02d:00' % h}}">{{h}}시</option>
+        <hr>
+        <h2>2. 이용 일정 선택 (시간 선택)</h2>
+        <p>이용할 시간대를 모두 선택해주세요 (연속 선택 필수)</p>
+        <div class="time-grid">
+            {% for h in range(9, 18) %}
+                {% if h in booked_hours %}
+                    <label class="time-slot disabled">
+                        <input type="checkbox" name="time_slot" value="{{ h }}" disabled>
+                        <span>{{ h }}:00</span><br>(마감)
+                    </label>
+                {% else %}
+                    <label class="time-slot">
+                        <input type="checkbox" name="time_slot" value="{{ h }}">
+                        <span>{{ h }}:00</span>
+                    </label>
+                {% endif %}
             {% endfor %}
-        </select>
-        종료: 
-        <select name="end_time">
-            {% for h in range(10,19) %}
-            <option value="{{'%02d:00' % h}}">{{h}}시</option>
-            {% endfor %}
-        </select><br>
+        </div>
 
+        <hr>
         <h2>3. 이용 인원</h2>
-        초등: <input type="number" name="elementary" value="0"><br>
-        중등: <input type="number" name="middle" value="0"><br>
-        고등: <input type="number" name="high" value="0"><br>
-        후기청소년: <input type="number" name="teen" value="0"><br>
-        성인: <input type="number" name="adult" value="0"><br>
+        초등: <input type="number" name="elementary" value="0" min="0"><br>
+        중등: <input type="number" name="middle" value="0" min="0"><br>
+        고등: <input type="number" name="high" value="0" min="0"><br>
+        후기청소년: <input type="number" name="teen" value="0" min="0"><br>
+        성인: <input type="number" name="adult" value="0" min="0"><br>
 
+        <hr>
         <h2>4. 필요 물품</h2>
         <input type="checkbox" name="equipment" value="앰프"> 앰프
         <input type="checkbox" name="equipment" value="스피커"> 스피커
         <input type="checkbox" name="equipment" value="마이크"> 마이크
         <input type="checkbox" name="equipment" value="키보드"> 키보드<br>
 
+        <hr>
         <h2>5. 공지 및 준수사항</h2>
-        <p>asdf</p>
+        <ul>
+            <li>대관 시간은 최소 3일 전까지 신청해야 합니다.</li>
+            <li>음식물 반입을 금지합니다.</li>
+            <li>사용 후 정리정돈은 필수입니다.</li>
+        </ul>
         <label>
             <input type="checkbox" id="agree" name="agree" value="1" onchange="toggleSubmit()">
-            위 준수사항에 동의합니다
-        </label><br>
+            위 준수사항을 모두 확인했으며, 이에 동의합니다.
+        </label><br><br>
 
         <button id="submitBtn" type="submit" disabled>예약 신청하기</button>
     </form>
@@ -64,17 +111,6 @@
         const checkbox = document.getElementById("agree");
         const button = document.getElementById("submitBtn");
         button.disabled = !checkbox.checked;
-    }
-
-    function validateForm() {
-        const start = document.querySelector("select[name='start_time']").value;
-        const end = document.querySelector("select[name='end_time']").value;
-
-        if (start >= end) {
-            alert("종료 시간이 시작 시간보다 늦어야 합니다.");
-            return false; // 제출 막기
-        }
-        return true; // 정상 제출
     }
     </script>
 </body>
