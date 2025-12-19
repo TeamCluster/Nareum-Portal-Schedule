@@ -19,12 +19,58 @@ db.init_app(app)
 
 @app.route('/')
 def index():
+    selected_date_str = request.args.get("date")
     facilities = Facility.query.all()
-    return render_template("index.html", SERVICE_NAME=SERVICE_NAME, facilities=facilities)
+    
+    availability_data = {}
+    is_reservable = True  # 예약 가능 여부 (날짜 기준)
+
+    if selected_date_str:
+        try:
+            target_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+            today = datetime.today().date()
+
+            # [수정됨] 조회 시점에 날짜 검사: 오늘 포함 이전 날짜는 경고 메시지 출력
+            if target_date <= today:
+                flash("예약 신청은 내일 날짜부터 가능합니다. (현재는 현황 조회만 가능합니다)")
+                is_reservable = False
+
+            start_of_day = datetime.combine(target_date, datetime.min.time())
+            end_of_day = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
+
+            for facility in facilities:
+                reservations = Reservation.query.filter(
+                    Reservation.facility_id == facility.id,
+                    Reservation.start_time >= start_of_day,
+                    Reservation.start_time < end_of_day
+                ).all()
+
+                hours_status = {h: "available" for h in range(9, 18)}
+
+                for res in reservations:
+                    s_h = res.start_time.hour
+                    e_h = res.end_time.hour
+                    for h in range(s_h, e_h):
+                        if 9 <= h < 18:
+                            hours_status[h] = "booked"
+                
+                availability_data[facility.id] = hours_status
+
+        except ValueError:
+            flash("날짜 형식이 올바르지 않습니다.")
+            selected_date_str = None
+
+    return render_template(
+        "index.html", 
+        SERVICE_NAME=SERVICE_NAME, 
+        facilities=facilities,
+        selected_date=selected_date_str,
+        availability_data=availability_data,
+        is_reservable=is_reservable # 템플릿으로 전달
+    )
 
 @app.route('/reserve/<int:facility_id>', methods=["GET", "POST"])
 def reserve(facility_id):
-    # 날짜 파라미터 확인
     selected_date_str = request.args.get("date")
     if not selected_date_str:
         flash("예약할 날짜를 먼저 선택해주세요.")
@@ -43,56 +89,47 @@ def reserve(facility_id):
 
     facility = Facility.query.get_or_404(facility_id)
 
-    # [GET 요청 처리]: 이미 예약된 시간 확인하여 템플릿에 전달
-    # 해당 날짜, 해당 시설의 모든 예약 조회
     existing_res = Reservation.query.filter(
         Reservation.facility_id == facility_id,
         Reservation.start_time >= datetime.combine(selected_date_obj, datetime.min.time()),
         Reservation.start_time < datetime.combine(selected_date_obj + timedelta(days=1), datetime.min.time())
     ).all()
 
-    # 예약된 시간(09~18시 기준) 리스트 구하기
     booked_hours = []
     for res in existing_res:
-        # 예약 시작 시간부터 종료 시간 전까지의 '시간(hour)'을 리스트에 추가
         s_h = res.start_time.hour
         e_h = res.end_time.hour
         for h in range(s_h, e_h):
             booked_hours.append(h)
     
-    # [POST 요청 처리]: 예약 신청
     if request.method == "POST":
         name = request.form.get("name")
         contact = request.form.get("contact")
         school = request.form.get("school")
         club = request.form.get("club")
         
-        # 체크박스로 선택된 시간들 가져오기 (예: ['9', '10', '11'])
         selected_hours = request.form.getlist("time_slot")
         
         if not selected_hours:
             flash("이용할 시간을 최소 1개 이상 선택해야 합니다.")
             return redirect(url_for("reserve", facility_id=facility_id, date=selected_date_str))
 
-        # 시간 정렬 및 연속성 확인 (중간에 빈 시간이 없어야 함)
         selected_hours = sorted([int(h) for h in selected_hours])
         for i in range(len(selected_hours) - 1):
             if selected_hours[i] + 1 != selected_hours[i+1]:
                 flash("연속된 시간만 예약 가능합니다.")
                 return redirect(url_for("reserve", facility_id=facility_id, date=selected_date_str))
 
-        # 시작 시간과 종료 시간 계산 (예: 9, 10 선택 시 -> 09:00 시작, 11:00 종료)
         start_hour = selected_hours[0]
-        end_hour = selected_hours[-1] + 1  # 10시를 선택했으면 10:00~11:00 이용이므로 종료는 11시
+        end_hour = selected_hours[-1] + 1 
 
         start_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
         end_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
 
-        # [중복 검사] DB에서 한 번 더 검증 (동시 접속 방지)
         overlap = Reservation.query.filter(
             Reservation.facility_id == facility_id,
-            Reservation.start_time < end_dt, # 기존 시작 시간이 내 종료 시간보다 빨라야 하고
-            Reservation.end_time > start_dt  # 기존 종료 시간이 내 시작 시간보다 늦어야 함 (교집합 확인)
+            Reservation.start_time < end_dt, 
+            Reservation.end_time > start_dt
         ).first()
 
         if overlap:
@@ -135,7 +172,7 @@ def reserve(facility_id):
         facility_id=facility_id, 
         selected_date=selected_date_str, 
         facility=facility,
-        booked_hours=booked_hours # 예약된 시간 리스트 전달
+        booked_hours=booked_hours 
     )
 
 @app.route('/complete/<int:res_id>')
@@ -146,7 +183,6 @@ def reservation_complete(res_id):
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-        # 초기 데이터 셋업 (없으면 생성)
         if not Facility.query.first():
             facilities = [
                 Facility(name="활력충전터", type="연습실", description="음악 연습 공간"),
