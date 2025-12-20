@@ -46,3 +46,4 @@ class Reservation(db.Model):
 
     def __repr__(self):
         return f'<Reservation {self.id} {self.start_time}~{self.end_time}>'
+# 주석
