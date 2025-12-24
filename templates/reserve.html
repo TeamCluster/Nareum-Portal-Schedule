@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <title>예약 신청</title>
     <style>
-        /* 뼈대만 잡는 간단한 스타일 */
         .time-grid {
             display: flex;
             gap: 10px;
@@ -17,7 +16,7 @@
             cursor: pointer;
         }
         .time-slot input {
-            display: none; /* 체크박스 숨기고 라벨 클릭 유도 */
+            display: none; 
         }
         .time-slot.disabled {
             background-color: #eee;
@@ -27,7 +26,7 @@
         .time-slot.selected {
             background-color: #aaddff;
         }
-        /* 체크박스가 체크되면 배경색 변경 (CSS로만 처리) */
+        /* 체크박스가 체크되면 텍스트 스타일 변경 */
         .time-slot input:checked + span {
             font-weight: bold;
             color: blue;
@@ -41,7 +40,7 @@
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <ul style="color: red;">
+        <ul style="color: red; font-weight: bold;">
         {% for message in messages %}
           <li>{{ message }}</li>
         {% endfor %}
@@ -52,10 +51,15 @@
     <form method="post">
         <hr>
         <h2>1. 신청인 정보</h2>
-        이름: <input type="text" name="name" required><br>
-        연락처: <input type="text" name="contact" required placeholder="010-0000-0000"><br>
-        소속: <input type="text" name="school"><br>
-        동아리: <input type="text" name="club"><br>
+        이름: <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required><br>
+        
+        연락처: <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" 
+               required placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}" 
+               title="010-0000-0000 형식으로 입력해주세요"><br>
+        
+        소속: <input type="text" name="school" value="{{ form_data.school if form_data else '' }}" required><br>
+        
+        동아리: <input type="text" name="club" value="{{ form_data.club if form_data else '' }}"><br>
 
         <hr>
         <h2>2. 이용 일정 선택 (시간 선택)</h2>
@@ -69,7 +73,8 @@
                     </label>
                 {% else %}
                     <label class="time-slot">
-                        <input type="checkbox" name="time_slot" value="{{ h }}">
+                        <input type="checkbox" name="time_slot" value="{{ h }}" 
+                        {% if form_data and h|string in form_data.getlist('time_slot') %}checked{% endif %}>
                         <span>{{ h }}:00</span>
                     </label>
                 {% endif %}
@@ -78,18 +83,23 @@
 
         <hr>
         <h2>3. 이용 인원</h2>
-        초등: <input type="number" name="elementary" value="0" min="0"><br>
-        중등: <input type="number" name="middle" value="0" min="0"><br>
-        고등: <input type="number" name="high" value="0" min="0"><br>
-        후기청소년: <input type="number" name="teen" value="0" min="0"><br>
-        성인: <input type="number" name="adult" value="0" min="0"><br>
+        초등: <input type="number" name="elementary" value="{{ form_data.elementary if form_data else '0' }}" min="0"><br>
+        중등: <input type="number" name="middle" value="{{ form_data.middle if form_data else '0' }}" min="0"><br>
+        고등: <input type="number" name="high" value="{{ form_data.high if form_data else '0' }}" min="0"><br>
+        후기청소년: <input type="number" name="teen" value="{{ form_data.teen if form_data else '0' }}" min="0"><br>
+        성인: <input type="number" name="adult" value="{{ form_data.adult if form_data else '0' }}" min="0"><br>
 
         <hr>
         <h2>4. 필요 물품</h2>
-        <input type="checkbox" name="equipment" value="앰프"> 앰프
-        <input type="checkbox" name="equipment" value="스피커"> 스피커
-        <input type="checkbox" name="equipment" value="마이크"> 마이크
-        <input type="checkbox" name="equipment" value="키보드"> 키보드<br>
+        {% set equipments = ['앰프', '스피커', '마이크', '키보드'] %}
+        {% for item in equipments %}
+            <label>
+                <input type="checkbox" name="equipment" value="{{ item }}"
+                {% if form_data and item in form_data.getlist('equipment') %}checked{% endif %}>
+                {{ item }}
+            </label>
+        {% endfor %}
+        <br>
 
         <hr>
         <h2>5. 공지 및 준수사항</h2>
@@ -111,6 +121,11 @@
         const checkbox = document.getElementById("agree");
         const button = document.getElementById("submitBtn");
         button.disabled = !checkbox.checked;
+    }
+    
+    // 페이지 로드 시(에러로 리로드 된 경우 포함) 동의가 체크되어 있으면 버튼 활성화
+    window.onload = function() {
+        toggleSubmit();
     }
     </script>
 </body>
