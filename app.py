@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash
 from models import db, Facility, Reservation
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-import os, sys, io
+import os, sys, io, re
 
 # 한글 출력 설정
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
@@ -23,14 +23,13 @@ def index():
     facilities = Facility.query.all()
     
     availability_data = {}
-    is_reservable = True  # 예약 가능 여부 (날짜 기준)
+    is_reservable = True
 
     if selected_date_str:
         try:
             target_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
             today = datetime.today().date()
 
-            # [수정됨] 조회 시점에 날짜 검사: 오늘 포함 이전 날짜는 경고 메시지 출력
             if target_date <= today:
                 flash("예약 신청은 내일 날짜부터 가능합니다. (현재는 현황 조회만 가능합니다)")
                 is_reservable = False
@@ -66,7 +65,7 @@ def index():
         facilities=facilities,
         selected_date=selected_date_str,
         availability_data=availability_data,
-        is_reservable=is_reservable # 템플릿으로 전달
+        is_reservable=is_reservable
     )
 
 @app.route('/reserve/<int:facility_id>', methods=["GET", "POST"])
@@ -89,6 +88,7 @@ def reserve(facility_id):
 
     facility = Facility.query.get_or_404(facility_id)
 
+    # 기존 예약된 시간 계산
     existing_res = Reservation.query.filter(
         Reservation.facility_id == facility_id,
         Reservation.start_time >= datetime.combine(selected_date_obj, datetime.min.time()),
@@ -103,22 +103,58 @@ def reserve(facility_id):
             booked_hours.append(h)
     
     if request.method == "POST":
+        # 폼 데이터 가져오기
         name = request.form.get("name")
         contact = request.form.get("contact")
         school = request.form.get("school")
         club = request.form.get("club")
         
+        # 1. 이름 검사
+        if not name:
+            flash("신청인 이름을 입력해주세요.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        # 2. 소속(학교) 검사
+        if not school:
+            flash("소속을 입력해주세요.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        # 3. 전화번호 형식 검사 (010-xxxx-xxxx)
+        # ^ : 시작, \d{4} : 숫자 4개, $ : 끝
+        phone_pattern = re.compile(r'^010-\d{4}-\d{4}$')
+        if not phone_pattern.match(contact):
+            flash("연락처는 '010-0000-0000' 형식으로 정확히 입력해주세요.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+        
+        # [수정] 인원 수 합계 검증
+        try:
+            elem_cnt = int(request.form.get("elementary", 0))
+            mid_cnt = int(request.form.get("middle", 0))
+            high_cnt = int(request.form.get("high", 0))
+            teen_cnt = int(request.form.get("teen", 0))
+            adult_cnt = int(request.form.get("adult", 0))
+            total_participants = elem_cnt + mid_cnt + high_cnt + teen_cnt + adult_cnt
+        except ValueError:
+            total_participants = 0
+
+        if total_participants <= 0:
+            flash("이용 인원은 최소 1명 이상이어야 합니다.")
+            # [수정] redirect 대신 render_template로 폼 데이터 유지
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
         selected_hours = request.form.getlist("time_slot")
         
         if not selected_hours:
             flash("이용할 시간을 최소 1개 이상 선택해야 합니다.")
-            return redirect(url_for("reserve", facility_id=facility_id, date=selected_date_str))
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
         selected_hours = sorted([int(h) for h in selected_hours])
+        
+        # 연속된 시간인지 검증
         for i in range(len(selected_hours) - 1):
             if selected_hours[i] + 1 != selected_hours[i+1]:
                 flash("연속된 시간만 예약 가능합니다.")
-                return redirect(url_for("reserve", facility_id=facility_id, date=selected_date_str))
+                return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
         start_hour = selected_hours[0]
         end_hour = selected_hours[-1] + 1 
@@ -126,6 +162,7 @@ def reserve(facility_id):
         start_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
         end_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
 
+        # 중복 예약 확인 (서버 측 더블 체크)
         overlap = Reservation.query.filter(
             Reservation.facility_id == facility_id,
             Reservation.start_time < end_dt, 
@@ -134,21 +171,21 @@ def reserve(facility_id):
 
         if overlap:
             flash("선택하신 시간에 이미 다른 예약이 존재합니다. 다시 확인해주세요.")
-            return redirect(url_for("reserve", facility_id=facility_id, date=selected_date_str))
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
         participants = {
-            "elementary": request.form.get("elementary", 0),
-            "middle": request.form.get("middle", 0),
-            "high": request.form.get("high", 0),
-            "teen": request.form.get("teen", 0),
-            "adult": request.form.get("adult", 0),
+            "elementary": elem_cnt,
+            "middle": mid_cnt,
+            "high": high_cnt,
+            "teen": teen_cnt,
+            "adult": adult_cnt,
         }
         equipment = request.form.getlist("equipment")
         agree = request.form.get("agree")
 
         if not agree:
             flash("공지 및 준수사항에 동의해야 합니다.")
-            return redirect(url_for("reserve", facility_id=facility_id, date=selected_date_str))
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
         new_res = Reservation(
             facility_id=facility_id,
@@ -167,12 +204,14 @@ def reserve(facility_id):
 
         return redirect(url_for("reservation_complete", res_id=new_res.id))
 
+    # GET 요청 시에는 form_data 없음
     return render_template(
         "reserve.html", 
         facility_id=facility_id, 
         selected_date=selected_date_str, 
         facility=facility,
-        booked_hours=booked_hours 
+        booked_hours=booked_hours,
+        form_data={} 
     )
 
 @app.route('/complete/<int:res_id>')
