@@ -27,7 +27,9 @@
             border: 1px solid #999;
         }
 
+        /* 날짜 입력창 스타일 개선 */
         .search-box { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        input[type="date"] { padding: 8px; font-size: 16px; border-radius: 4px; border: 1px solid #ccc; }
     </style>
 </head>
 <body>
@@ -35,14 +37,16 @@
 
     <div class="search-box">
         <h3>어떤 공간을 찾고 계신가요?</h3>
-        <p>원하는 날짜를 선택하여 예약 가능한 공간을 찾아보세요.</p>
+        <p>원하는 날짜를 선택하면 예약 현황이 갱신됩니다.</p>
         
         <form id="searchForm" method="get" action="/">
             <label>날짜 선택: 
-                <input type="date" name="date" id="dateInput" value="{{ selected_date if selected_date else '' }}" required>
+                <input type="date" name="date" id="dateInput" 
+                       value="{{ selected_date if selected_date else '' }}" 
+                       required
+                       onchange="document.getElementById('searchForm').submit();">
             </label>
-            <button type="submit">조회하기</button>
-        </form>
+            </form>
     </div>
 
     <hr>
@@ -56,7 +60,9 @@
     {% endwith %}
 
     {% if not selected_date %}
-        <p style="color: blue;">위에서 날짜를 선택하고 '조회하기'를 눌러주세요.</p>
+        <p style="color: blue;">위에서 날짜를 선택해주세요.</p>
+    {% else %}
+        <p><strong>선택된 날짜:</strong> {{ selected_date }}</p>
     {% endif %}
 
     <div>
@@ -68,8 +74,8 @@
                     <p>{{ f.description if f.description else "설명 없음" }}</p>
                 </div>
                 
-                <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}" onsubmit="return checkReservationDate(this)">
-                    <input type="hidden" name="date" class="hiddenDate" value="{{ selected_date }}">
+                <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}">
+                    <input type="hidden" name="date" value="{{ selected_date }}">
                     
                     {% set is_sold_out = False %}
                     {% if selected_date and availability_data %}
@@ -78,8 +84,10 @@
                         {% endif %}
                     {% endif %}
 
-                    {% if not is_reservable %}
-                         <button type="submit" disabled>예약 불가</button>
+                    {% if not selected_date %}
+                        <button type="button" disabled>날짜를 선택해주세요</button>
+                    {% elif not is_reservable %}
+                         <button type="submit" disabled>예약 불가 (과거/오늘)</button>
                     {% elif is_sold_out %}
                         <button type="submit" disabled>예약 마감</button>
                     {% else %}
@@ -90,7 +98,7 @@
 
             {% if selected_date and availability_data %}
             <div class="status-container">
-                <div class="legend">오늘의 예약 현황 (09:00 ~ 18:00)</div>
+                <div class="legend">예약 현황 (09:00 ~ 18:00)</div>
                 <div class="status-bar">
                     {% for h in range(9, 18) %}
                         {% set status = availability_data[f.id][h] %}
@@ -110,39 +118,23 @@
     </div>
 
     <script>
+    // [수정 5] 페이지 로드 시 날짜가 없으면 자동으로 오늘 날짜 세팅 (선택사항)
+    // 날짜를 세팅하면서 바로 조회를 하려면 submit()을 호출하면 되지만, 
+    // 무한 리로딩을 방지하기 위해 value만 채우거나, 사용자가 직접 선택하게 둡니다.
     window.onload = function() {
         const dateInput = document.getElementById("dateInput");
+        // 만약 서버에서 넘어온 날짜가 없다면(첫 접속), 오늘 날짜를 기본값으로 보여주기만 함 (자동 조회 X)
         if (!dateInput.value) {
             const today = new Date();
             const yyyy = today.getFullYear();
             const mm = String(today.getMonth() + 1).padStart(2, '0');
             const dd = String(today.getDate()).padStart(2, '0');
-            // dateInput.value = `${yyyy}-${mm}-${dd}`;
+            // dateInput.value = `${yyyy}-${mm}-${dd}`; // 필요 시 주석 해제
         }
     }
-
-    function checkReservationDate(form){
-        const mainDateInput = document.getElementById("dateInput").value;
-        
-        if(!mainDateInput){
-            alert("상단의 [날짜 선택]에서 예약할 날짜를 먼저 선택하고 '조회하기'를 눌러주세요.");
-            return false;
-        }
-
-        const today = new Date();
-        today.setHours(0,0,0,0);
-        
-        const selected = new Date(mainDateInput);
-        
-        if(selected <= today){
-            // 이미 app.py에서 flash를 띄우고 버튼을 막지만, 혹시 모를 클라이언트 측 방어
-            alert("예약 신청은 내일 날짜부터 가능합니다.\n(현황 조회는 오늘 날짜도 가능합니다)");
-            return false;
-        }
-
-        form.querySelector(".hiddenDate").value = mainDateInput;
-        return true;
-    }
+    
+    // 기존의 복잡한 checkReservationDate 함수는 이제 필요가 거의 없으므로 삭제하거나
+    // 만일의 경우를 대비해 최소한의 방어만 남겨둡니다.
     </script>
 </body>
 </html>
