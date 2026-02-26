@@ -4,44 +4,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ SERVICE_NAME }}</title>
-    <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-        .facility-card { border: 1px solid #ddd; margin: 20px 0; padding: 20px; border-radius: 8px; }
-        .facility-header { display: flex; justify-content: space-between; align-items: center; }
-        .status-container { margin-top: 15px; }
-        .status-bar { display: flex; height: 30px; margin-top: 5px; }
-        .status-slot { flex: 1; border-right: 1px solid #fff; text-align: center; color: white; font-size: 10px; line-height: 30px; }
-        .status-slot:last-child { border-right: none; }
-        
-        .available { background-color: #4CAF50; } 
-        .booked { background-color: #ccc; }       
-        
-        .legend { font-size: 12px; color: #666; margin-bottom: 5px; }
-        
-        button { padding: 10px 15px; cursor: pointer; }
-        
-        button:disabled {
-            background-color: #ccc;
-            color: #666;
-            cursor: not-allowed;
-            border: 1px solid #999;
-        }
-
-        .search-box { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <h1>{{ SERVICE_NAME }}</h1>
+    <div class="header-top">
+        <h1>{{ SERVICE_NAME }}</h1>
+        <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
+    </div>
 
     <div class="search-box">
         <h3>어떤 공간을 찾고 계신가요?</h3>
-        <p>원하는 날짜를 선택하여 예약 가능한 공간을 찾아보세요.</p>
+        <p>원하는 날짜를 선택하면 예약 현황이 갱신됩니다.</p>
         
         <form id="searchForm" method="get" action="/">
             <label>날짜 선택: 
-                <input type="date" name="date" id="dateInput" value="{{ selected_date if selected_date else '' }}" required>
+                <input type="date" name="date" id="dateInput" 
+                       value="{{ selected_date if selected_date else '' }}" 
+                       required
+                       onchange="document.getElementById('searchForm').submit();">
             </label>
-            <button type="submit">조회하기</button>
         </form>
     </div>
 
@@ -51,12 +32,18 @@
     
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <p style="color:red; font-weight:bold;">{{ messages[0] }}</p>
+        <ul class="flash-messages">
+        {% for message in messages %}
+            <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
       {% endif %}
     {% endwith %}
 
     {% if not selected_date %}
-        <p style="color: blue;">위에서 날짜를 선택하고 '조회하기'를 눌러주세요.</p>
+        <p style="color: #007bff;">위에서 날짜를 선택해주세요.</p>
+    {% else %}
+        <p><strong>선택된 날짜:</strong> {{ selected_date }}</p>
     {% endif %}
 
     <div>
@@ -68,8 +55,8 @@
                     <p>{{ f.description if f.description else "설명 없음" }}</p>
                 </div>
                 
-                <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}" onsubmit="return checkReservationDate(this)">
-                    <input type="hidden" name="date" class="hiddenDate" value="{{ selected_date }}">
+                <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}">
+                    <input type="hidden" name="date" value="{{ selected_date }}">
                     
                     {% set is_sold_out = False %}
                     {% if selected_date and availability_data %}
@@ -78,19 +65,21 @@
                         {% endif %}
                     {% endif %}
 
-                    {% if not is_reservable %}
-                         <button type="submit" disabled>예약 불가</button>
+                    {% if not selected_date %}
+                        <button type="button" disabled>날짜를 선택해주세요</button>
+                    {% elif not is_reservable %}
+                         <button type="submit" disabled>예약 불가 (과거/오늘)</button>
                     {% elif is_sold_out %}
                         <button type="submit" disabled>예약 마감</button>
                     {% else %}
-                        <button type="submit">상세보기 및 예약</button>
+                        <button type="submit" class="btn-primary">상세보기 및 예약</button>
                     {% endif %}
                 </form>
             </div>
 
             {% if selected_date and availability_data %}
             <div class="status-container">
-                <div class="legend">오늘의 예약 현황 (09:00 ~ 18:00)</div>
+                <div class="legend">예약 현황 (09:00 ~ 18:00)</div>
                 <div class="status-bar">
                     {% for h in range(9, 18) %}
                         {% set status = availability_data[f.id][h] %}
@@ -109,40 +98,6 @@
         {% endfor %}
     </div>
 
-    <script>
-    window.onload = function() {
-        const dateInput = document.getElementById("dateInput");
-        if (!dateInput.value) {
-            const today = new Date();
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const dd = String(today.getDate()).padStart(2, '0');
-            // dateInput.value = `${yyyy}-${mm}-${dd}`;
-        }
-    }
-
-    function checkReservationDate(form){
-        const mainDateInput = document.getElementById("dateInput").value;
-        
-        if(!mainDateInput){
-            alert("상단의 [날짜 선택]에서 예약할 날짜를 먼저 선택하고 '조회하기'를 눌러주세요.");
-            return false;
-        }
-
-        const today = new Date();
-        today.setHours(0,0,0,0);
-        
-        const selected = new Date(mainDateInput);
-        
-        if(selected <= today){
-            // 이미 app.py에서 flash를 띄우고 버튼을 막지만, 혹시 모를 클라이언트 측 방어
-            alert("예약 신청은 내일 날짜부터 가능합니다.\n(현황 조회는 오늘 날짜도 가능합니다)");
-            return false;
-        }
-
-        form.querySelector(".hiddenDate").value = mainDateInput;
-        return true;
-    }
-    </script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

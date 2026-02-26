@@ -1,0 +1,38 @@
+/* 기본 레이아웃 */
+body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
+hr { margin: 20px 0; border: 0; border-top: 1px solid #ddd; }
+
+/* 버튼 디자인 */
+button, .btn { padding: 10px 15px; cursor: pointer; text-decoration: none; border-radius: 4px; border: 1px solid #ccc; background-color: #f8f9fa; color: #333; display: inline-block;}
+button:disabled { background-color: #ccc; color: #666; cursor: not-allowed; border: 1px solid #999; }
+.btn-primary { background-color: #007bff; color: white; border: none; }
+.btn-danger { background-color: #dc3545; color: white; border: none; padding: 5px 10px; font-size: 14px;}
+
+/* 메인 페이지 - 검색창 및 시설 카드 */
+.header-top { display: flex; justify-content: space-between; align-items: center; }
+.search-box { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+input[type="date"], input[type="text"], input[type="number"] { padding: 8px; font-size: 16px; border-radius: 4px; border: 1px solid #ccc; margin-bottom: 10px;}
+.facility-card { border: 1px solid #ddd; margin: 20px 0; padding: 20px; border-radius: 8px; }
+.facility-header { display: flex; justify-content: space-between; align-items: center; }
+
+/* 예약 현황 바 */
+.status-container { margin-top: 15px; }
+.status-bar { display: flex; height: 30px; margin-top: 5px; }
+.status-slot { flex: 1; border-right: 1px solid #fff; text-align: center; color: white; font-size: 10px; line-height: 30px; }
+.status-slot:last-child { border-right: none; }
+.available { background-color: #4CAF50; } 
+.booked { background-color: #ccc; }       
+.legend { font-size: 12px; color: #666; margin-bottom: 5px; }
+
+/* 예약 페이지 - 시간 그리드 */
+.time-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+.time-slot { border: 1px solid #ccc; padding: 10px; text-align: center; cursor: pointer; border-radius: 4px;}
+.time-slot input { display: none; }
+.time-slot.disabled { background-color: #eee; color: #aaa; cursor: not-allowed; }
+.time-slot input:checked + span { font-weight: bold; color: #007bff; }
+
+/* 예약 조회 내역 리스트 */
+.reservation-list { margin-top: 20px; }
+.reservation-item { border: 1px solid #ddd; padding: 15px; border-radius: 8px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;}
+.reservation-info p { margin: 5px 0; }
+.flash-messages { color: #dc3545; font-weight: bold; margin-bottom: 15px; list-style-type: none; padding-left: 0;}
