@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>예약 내역 조회</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="header-top">
+        <h1>예약 내역 조회 및 취소</h1>
+        <a href="{{ url_for('index') }}" class="btn">메인으로 돌아가기</a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class="flash-messages">
+        {% for message in messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <div class="search-box">
+        <form method="post" action="{{ url_for('check') }}">
+            <label>이름: 
+                <input type="text" name="name" required placeholder="신청자 이름">
+            </label><br>
+            <label>연락처: 
+                <input type="text" name="contact" required placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}">
+            </label><br>
+            <button type="submit" class="btn-primary" style="margin-top: 10px;">조회하기</button>
+        </form>
+    </div>
+
+    <hr>
+
+    {% if reservations is not none %}
+        <h2>조회 결과</h2>
+        
+        <div style="background-color: #e9ecef; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+            <p style="margin: 0; color: #333;">
+                <strong>{{ search_name }}</strong>님 (<span style="color: #007bff;">{{ search_contact }}</span>)의 예약 조회 결과입니다.
+            </p>
+        </div>
+
+        <div class="reservation-list">
+            {% for res in reservations %}
+            <div class="reservation-item">
+                <div class="reservation-info">
+                    <p><strong>시설명:</strong> {{ res.facility.name }} ({{ res.facility.type }})</p>
+                    <p><strong>이용 날짜:</strong> {{ res.start_time.strftime('%Y-%m-%d') }}</p>
+                    <p><strong>이용 시간:</strong> {{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</p>
+                    <p><strong>상태:</strong> 예약 완료</p>
+                </div>
+                <div>
+                    <form method="post" action="{{ url_for('cancel', res_id=res.id) }}" onsubmit="return confirm('이 예약을 정말 취소하시겠습니까? 취소 후에는 복구할 수 없습니다.');">
+                        <button type="submit" class="btn-danger">예약 취소</button>
+                    </form>
+                </div>
+            </div>
+            {% else %}
+                <p>현재 확정된 예약 내역이 없습니다.</p>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+</body>
+</html>

@@ -38,10 +38,12 @@ def index():
             end_of_day = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
 
             for facility in facilities:
+                # [수정] status가 'confirmed'인 예약만 조회하여 취소된 예약은 자리를 차지하지 않도록 함
                 reservations = Reservation.query.filter(
                     Reservation.facility_id == facility.id,
                     Reservation.start_time >= start_of_day,
-                    Reservation.start_time < end_of_day
+                    Reservation.start_time < end_of_day,
+                    Reservation.status == "confirmed" 
                 ).all()
 
                 hours_status = {h: "available" for h in range(9, 18)}
@@ -88,11 +90,12 @@ def reserve(facility_id):
 
     facility = Facility.query.get_or_404(facility_id)
 
-    # 기존 예약된 시간 계산
+    # [수정] 취소된 예약 무시
     existing_res = Reservation.query.filter(
         Reservation.facility_id == facility_id,
         Reservation.start_time >= datetime.combine(selected_date_obj, datetime.min.time()),
-        Reservation.start_time < datetime.combine(selected_date_obj + timedelta(days=1), datetime.min.time())
+        Reservation.start_time < datetime.combine(selected_date_obj + timedelta(days=1), datetime.min.time()),
+        Reservation.status == "confirmed"
     ).all()
 
     booked_hours = []
@@ -103,30 +106,24 @@ def reserve(facility_id):
             booked_hours.append(h)
     
     if request.method == "POST":
-        # 폼 데이터 가져오기
         name = request.form.get("name")
         contact = request.form.get("contact")
         school = request.form.get("school")
         club = request.form.get("club")
         
-        # 1. 이름 검사
         if not name:
             flash("신청인 이름을 입력해주세요.")
             return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
-        # 2. 소속(학교) 검사
         if not school:
             flash("소속을 입력해주세요.")
             return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
-        # 3. 전화번호 형식 검사 (010-xxxx-xxxx)
-        # ^ : 시작, \d{4} : 숫자 4개, $ : 끝
         phone_pattern = re.compile(r'^010-\d{4}-\d{4}$')
         if not phone_pattern.match(contact):
             flash("연락처는 '010-0000-0000' 형식으로 정확히 입력해주세요.")
             return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
         
-        # [수정] 인원 수 합계 검증
         try:
             elem_cnt = int(request.form.get("elementary", 0))
             mid_cnt = int(request.form.get("middle", 0))
@@ -139,7 +136,6 @@ def reserve(facility_id):
 
         if total_participants <= 0:
             flash("이용 인원은 최소 1명 이상이어야 합니다.")
-            # [수정] redirect 대신 render_template로 폼 데이터 유지
             return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
 
         selected_hours = request.form.getlist("time_slot")
@@ -150,7 +146,6 @@ def reserve(facility_id):
 
         selected_hours = sorted([int(h) for h in selected_hours])
         
-        # 연속된 시간인지 검증
         for i in range(len(selected_hours) - 1):
             if selected_hours[i] + 1 != selected_hours[i+1]:
                 flash("연속된 시간만 예약 가능합니다.")
@@ -162,11 +157,12 @@ def reserve(facility_id):
         start_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
         end_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
 
-        # 중복 예약 확인 (서버 측 더블 체크)
+        # [수정] 취소된 예약과의 시간 중복은 허용
         overlap = Reservation.query.filter(
             Reservation.facility_id == facility_id,
             Reservation.start_time < end_dt, 
-            Reservation.end_time > start_dt
+            Reservation.end_time > start_dt,
+            Reservation.status == "confirmed"
         ).first()
 
         if overlap:
@@ -204,7 +200,6 @@ def reserve(facility_id):
 
         return redirect(url_for("reservation_complete", res_id=new_res.id))
 
-    # GET 요청 시에는 form_data 없음
     return render_template(
         "reserve.html", 
         facility_id=facility_id, 
@@ -218,6 +213,47 @@ def reserve(facility_id):
 def reservation_complete(res_id):
     res = Reservation.query.get_or_404(res_id)
     return render_template("complete.html", reservation=res, SERVICE_NAME=SERVICE_NAME)
+
+# [추가] 예약 조회 페이지
+# [수정된 부분] 예약 조회 페이지
+@app.route('/check', methods=['GET', 'POST'])
+def check():
+    reservations = None
+    search_name = None     # 템플릿으로 넘겨줄 이름 변수 추가
+    search_contact = None  # 템플릿으로 넘겨줄 연락처 변수 추가
+
+    if request.method == 'POST':
+        name = request.form.get('name')
+        contact = request.form.get('contact')
+        
+        search_name = name
+        search_contact = contact
+        
+        # 이름과 연락처가 일치하며, 취소되지 않은 예약만 최근 순으로 조회
+        reservations = Reservation.query.filter_by(
+            applicant_name=name,
+            applicant_contact=contact,
+            status="confirmed"
+        ).order_by(Reservation.start_time.desc()).all()
+        
+        if not reservations:
+            flash("입력하신 정보와 일치하는 예약 내역이 없습니다.")
+            
+    # search_name과 search_contact를 추가로 넘겨줍니다.
+    return render_template('check.html', reservations=reservations, search_name=search_name, search_contact=search_contact, SERVICE_NAME=SERVICE_NAME)
+
+# [추가] 예약 취소 처리 로직
+@app.route('/cancel/<int:res_id>', methods=['POST'])
+def cancel(res_id):
+    res = Reservation.query.get_or_404(res_id)
+    if res.status == 'confirmed':
+        res.status = 'cancelled'
+        db.session.commit()
+        flash("예약이 정상적으로 취소되었습니다.")
+    else:
+        flash("이미 취소되었거나 유효하지 않은 예약입니다.")
+        
+    return redirect(url_for('check'))
 
 if __name__ == "__main__":
     with app.app_context():

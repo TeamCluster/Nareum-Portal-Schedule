@@ -3,35 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>예약 신청</title>
-    <style>
-        .time-grid {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .time-slot {
-            border: 1px solid #ccc;
-            padding: 10px;
-            text-align: center;
-            cursor: pointer;
-        }
-        .time-slot input {
-            display: none; 
-        }
-        .time-slot.disabled {
-            background-color: #eee;
-            color: #aaa;
-            cursor: not-allowed;
-        }
-        .time-slot.selected {
-            background-color: #aaddff;
-        }
-        /* 체크박스가 체크되면 텍스트 스타일 변경 */
-        .time-slot input:checked + span {
-            font-weight: bold;
-            color: blue;
-        }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <h1>예약 신청서</h1>
@@ -40,7 +12,7 @@
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <ul style="color: red; font-weight: bold;">
+        <ul class="flash-messages">
         {% for message in messages %}
           <li>{{ message }}</li>
         {% endfor %}
@@ -109,24 +81,14 @@
             <li>사용 후 정리정돈은 필수입니다.</li>
         </ul>
         <label>
-            <input type="checkbox" id="agree" name="agree" value="1" onchange="toggleSubmit()">
+            <input type="checkbox" id="agree" name="agree" value="1">
             위 준수사항을 모두 확인했으며, 이에 동의합니다.
         </label><br><br>
 
-        <button id="submitBtn" type="submit" disabled>예약 신청하기</button>
+        <button id="submitBtn" type="submit" class="btn-primary" disabled>예약 신청하기</button>
+        <a href="{{ url_for('index') }}" class="btn">돌아가기</a>
     </form>
 
-    <script>
-    function toggleSubmit() {
-        const checkbox = document.getElementById("agree");
-        const button = document.getElementById("submitBtn");
-        button.disabled = !checkbox.checked;
-    }
-    
-    // 페이지 로드 시(에러로 리로드 된 경우 포함) 동의가 체크되어 있으면 버튼 활성화
-    window.onload = function() {
-        toggleSubmit();
-    }
-    </script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

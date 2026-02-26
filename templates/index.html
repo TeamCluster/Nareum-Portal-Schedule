@@ -4,36 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ SERVICE_NAME }}</title>
-    <style>
-        body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-        .facility-card { border: 1px solid #ddd; margin: 20px 0; padding: 20px; border-radius: 8px; }
-        .facility-header { display: flex; justify-content: space-between; align-items: center; }
-        .status-container { margin-top: 15px; }
-        .status-bar { display: flex; height: 30px; margin-top: 5px; }
-        .status-slot { flex: 1; border-right: 1px solid #fff; text-align: center; color: white; font-size: 10px; line-height: 30px; }
-        .status-slot:last-child { border-right: none; }
-        
-        .available { background-color: #4CAF50; } 
-        .booked { background-color: #ccc; }       
-        
-        .legend { font-size: 12px; color: #666; margin-bottom: 5px; }
-        
-        button { padding: 10px 15px; cursor: pointer; }
-        
-        button:disabled {
-            background-color: #ccc;
-            color: #666;
-            cursor: not-allowed;
-            border: 1px solid #999;
-        }
-
-        /* 날짜 입력창 스타일 개선 */
-        .search-box { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-        input[type="date"] { padding: 8px; font-size: 16px; border-radius: 4px; border: 1px solid #ccc; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <h1>{{ SERVICE_NAME }}</h1>
+    <div class="header-top">
+        <h1>{{ SERVICE_NAME }}</h1>
+        <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
+    </div>
 
     <div class="search-box">
         <h3>어떤 공간을 찾고 계신가요?</h3>
@@ -46,7 +23,7 @@
                        required
                        onchange="document.getElementById('searchForm').submit();">
             </label>
-            </form>
+        </form>
     </div>
 
     <hr>
@@ -55,12 +32,16 @@
     
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <p style="color:red; font-weight:bold;">{{ messages[0] }}</p>
+        <ul class="flash-messages">
+        {% for message in messages %}
+            <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
       {% endif %}
     {% endwith %}
 
     {% if not selected_date %}
-        <p style="color: blue;">위에서 날짜를 선택해주세요.</p>
+        <p style="color: #007bff;">위에서 날짜를 선택해주세요.</p>
     {% else %}
         <p><strong>선택된 날짜:</strong> {{ selected_date }}</p>
     {% endif %}
@@ -91,7 +72,7 @@
                     {% elif is_sold_out %}
                         <button type="submit" disabled>예약 마감</button>
                     {% else %}
-                        <button type="submit">상세보기 및 예약</button>
+                        <button type="submit" class="btn-primary">상세보기 및 예약</button>
                     {% endif %}
                 </form>
             </div>
@@ -117,24 +98,6 @@
         {% endfor %}
     </div>
 
-    <script>
-    // [수정 5] 페이지 로드 시 날짜가 없으면 자동으로 오늘 날짜 세팅 (선택사항)
-    // 날짜를 세팅하면서 바로 조회를 하려면 submit()을 호출하면 되지만, 
-    // 무한 리로딩을 방지하기 위해 value만 채우거나, 사용자가 직접 선택하게 둡니다.
-    window.onload = function() {
-        const dateInput = document.getElementById("dateInput");
-        // 만약 서버에서 넘어온 날짜가 없다면(첫 접속), 오늘 날짜를 기본값으로 보여주기만 함 (자동 조회 X)
-        if (!dateInput.value) {
-            const today = new Date();
-            const yyyy = today.getFullYear();
-            const mm = String(today.getMonth() + 1).padStart(2, '0');
-            const dd = String(today.getDate()).padStart(2, '0');
-            // dateInput.value = `${yyyy}-${mm}-${dd}`; // 필요 시 주석 해제
-        }
-    }
-    
-    // 기존의 복잡한 checkReservationDate 함수는 이제 필요가 거의 없으므로 삭제하거나
-    // 만일의 경우를 대비해 최소한의 방어만 남겨둡니다.
-    </script>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>
