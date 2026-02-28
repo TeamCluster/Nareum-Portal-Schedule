@@ -51,7 +51,13 @@
                     <p><strong>시설명:</strong> {{ res.facility.name }} ({{ res.facility.type }})</p>
                     <p><strong>이용 날짜:</strong> {{ res.start_time.strftime('%Y-%m-%d') }}</p>
                     <p><strong>이용 시간:</strong> {{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</p>
-                    <p><strong>상태:</strong> 예약 완료</p>
+                    <p><strong>상태:</strong> 
+                        {% if res.status == 'pending' %}
+                            <span style="color: #ff9800; font-weight: bold;">승인 대기 중</span> (관리자 확인 후 확정됩니다)
+                        {% elif res.status == 'confirmed' %}
+                            <span style="color: #4CAF50; font-weight: bold;">예약 확정</span>
+                        {% endif %}
+                    </p>
                 </div>
                 <div>
                     <form method="post" action="{{ url_for('cancel', res_id=res.id) }}" onsubmit="return confirm('이 예약을 정말 취소하시겠습니까? 취소 후에는 복구할 수 없습니다.');">

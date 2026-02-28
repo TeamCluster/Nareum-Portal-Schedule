@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>예약 수정 (관리자)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="header-top">
+        <h1>예약 수정 (관리자용)</h1>
+        <a href="{{ url_for('admin') }}" class="btn">뒤로 가기</a>
+    </div>
+
+    <div class="facility-card">
+        <p><strong>시설명:</strong> {{ res.facility.name }}</p>
+        <p><strong>이용 시간:</strong> {{ res.start_time.strftime('%Y-%m-%d %H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</p>
+        
+        <form method="post">
+            <hr>
+            <label>신청인 이름:<br>
+                <input type="text" name="name" value="{{ res.applicant_name }}" required>
+            </label><br>
+            
+            <label>연락처:<br>
+                <input type="text" name="contact" value="{{ res.applicant_contact }}" required>
+            </label><br>
+
+            <label>소속:<br>
+                <input type="text" name="school" value="{{ res.applicant_school }}" required>
+            </label><br>
+
+            <label>예약 상태:<br>
+                <select name="status" style="padding: 8px; font-size: 16px;">
+                    <option value="pending" {% if res.status == 'pending' %}selected{% endif %}>승인 대기 (Pending)</option>
+                    <option value="confirmed" {% if res.status == 'confirmed' %}selected{% endif %}>예약 확정 (Confirmed)</option>
+                    <option value="cancelled" {% if res.status == 'cancelled' %}selected{% endif %}>예약 취소 (Cancelled)</option>
+                </select>
+            </label><br><br>
+
+            <button type="submit" class="btn-primary">수정 완료</button>
+        </form>
+    </div>
+</body>
+</html>
