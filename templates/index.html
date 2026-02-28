@@ -9,7 +9,10 @@
 <body>
     <div class="header-top">
         <h1>{{ SERVICE_NAME }}</h1>
-        <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
+        <div>
+            <a href="{{ url_for('admin') }}" class="btn" style="background-color:#333; color:white;">관리자 페이지</a>
+            <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
+        </div>
     </div>
 
     <div class="search-box">

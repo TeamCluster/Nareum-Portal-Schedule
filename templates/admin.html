@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>관리자 페이지 - 대관 관리</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .admin-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 30px; }
+        .badge-pending { background-color: #ffc107; color: #000; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
+        .badge-confirmed { background-color: #28a745; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background-color: #f4f4f4; }
+        .action-btns { display: flex; gap: 5px; }
+    </style>
+</head>
+<body style="max-width: 1000px;">
+    <div class="header-top">
+        <h1>관리자 대시보드</h1>
+        <a href="{{ url_for('index') }}" class="btn">메인으로 돌아가기</a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class="flash-messages">
+        {% for message in messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <div class="admin-section">
+        <h2>승인 대기 중인 예약</h2>
+        {% if pending_reservations %}
+        <table>
+            <thead>
+                <tr>
+                    <th>시설명</th>
+                    <th>날짜 / 시간</th>
+                    <th>신청인 (연락처)</th>
+                    <th>상태</th>
+                    <th>작업</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for res in pending_reservations %}
+                <tr>
+                    <td>{{ res.facility.name }}</td>
+                    <td>{{ res.start_time.strftime('%Y-%m-%d %H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</td>
+                    <td>{{ res.applicant_name }}<br><small>{{ res.applicant_contact }}</small></td>
+                    <td><span class="badge-pending">승인 대기</span></td>
+                    <td>
+                        <div class="action-btns">
+                            <form method="post" action="{{ url_for('admin_approve', res_id=res.id) }}">
+                                <button type="submit" class="btn-primary" style="padding: 5px 10px; font-size: 13px;">승인</button>
+                            </form>
+                            <form method="post" action="{{ url_for('admin_delete', res_id=res.id) }}" onsubmit="return confirm('이 예약을 거절/삭제하시겠습니까?');">
+                                <button type="submit" class="btn-danger">거절</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>승인 대기 중인 예약이 없습니다.</p>
+        {% endif %}
+    </div>
+
+    <div class="admin-section">
+        <h2>날짜별 예약 조회 및 관리</h2>
+        <form method="get" action="{{ url_for('admin') }}" style="margin-bottom: 15px;">
+            <input type="date" name="date" value="{{ target_date }}" onchange="this.form.submit()">
+        </form>
+
+        {% if date_reservations %}
+        <table>
+            <thead>
+                <tr>
+                    <th>시설명</th>
+                    <th>시간</th>
+                    <th>신청인 (연락처)</th>
+                    <th>상태</th>
+                    <th>작업</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for res in date_reservations %}
+                <tr>
+                    <td>{{ res.facility.name }}</td>
+                    <td>{{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</td>
+                    <td>{{ res.applicant_name }} ({{ res.applicant_contact }})</td>
+                    <td>
+                        {% if res.status == 'pending' %}<span class="badge-pending">대기</span>
+                        {% elif res.status == 'confirmed' %}<span class="badge-confirmed">확정</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="action-btns">
+                            <a href="{{ url_for('admin_edit', res_id=res.id) }}" class="btn" style="padding: 5px 10px; font-size: 13px;">수정</a>
+                            <form method="post" action="{{ url_for('admin_delete', res_id=res.id) }}" onsubmit="return confirm('이 예약을 삭제하시겠습니까?');">
+                                <button type="submit" class="btn-danger">삭제</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>{{ target_date }} 일자의 활성화된 예약이 없습니다.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
