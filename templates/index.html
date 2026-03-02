@@ -1,106 +1,103 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ SERVICE_NAME }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-    <div class="header-top">
-        <h1>{{ SERVICE_NAME }}</h1>
-        <div>
-            <a href="{{ url_for('admin') }}" class="btn" style="background-color:#333; color:white;">관리자 페이지</a>
-            <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
+{% extends "base.html" %}
+
+{% block content %}
+<!-- 히어로 검색 섹션 -->
+<section class="search-box">
+    <h3>어떤 공간을 예약할까요?</h3>
+    <p>날짜를 선택해 대관 현황을 확인해 보세요.</p>
+
+    <form id="searchForm" method="get" action="/" class="search-form">
+        <input type="date" name="date" id="dateInput" value="{{ selected_date if selected_date else '' }}" required
+            onchange="document.getElementById('searchForm').submit();">
+    </form>
+</section>
+
+<!-- 알림 및 안내 메시지 (Notice Box) -->
+{% with messages = get_flashed_messages() %}
+{% if messages %}
+<ul class="flash-messages">
+    {% for message in messages %}
+    <li>{{ message }}</li>
+    {% endfor %}
+</ul>
+{% endif %}
+{% endwith %}
+
+<!-- 시설 목록 그리드 -->
+<div class="facility-grid">
+    {% for f in facilities %}
+    <article class="facility-card">
+        <!-- 카드 상단 영역: 이미지 및 타입 배지 -->
+        <div class="card-image">
+            {% if f.image_url %}
+            <img src="{{ f.image_url }}" alt="{{ f.name }}">
+            {% else %}
+            <img src="https://via.placeholder.com/400x200?text={{ f.name }}" alt="{{ f.name }}">
+            {% endif %}
+            <span class="facility-type-badge">{{ f.type }}</span>
         </div>
-    </div>
 
-    <div class="search-box">
-        <h3>어떤 공간을 찾고 계신가요?</h3>
-        <p>원하는 날짜를 선택하면 예약 현황이 갱신됩니다.</p>
-        
-        <form id="searchForm" method="get" action="/">
-            <label>날짜 선택: 
-                <input type="date" name="date" id="dateInput" 
-                       value="{{ selected_date if selected_date else '' }}" 
-                       required
-                       onchange="document.getElementById('searchForm').submit();">
-            </label>
-        </form>
-    </div>
-
-    <hr>
-
-    <h2>예약 가능 시설 목록</h2>
-    
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul class="flash-messages">
-        {% for message in messages %}
-            <li>{{ message }}</li>
-        {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
-
-    {% if not selected_date %}
-        <p style="color: #007bff;">위에서 날짜를 선택해주세요.</p>
-    {% else %}
-        <p><strong>선택된 날짜:</strong> {{ selected_date }}</p>
-    {% endif %}
-
-    <div>
-        {% for f in facilities %}
-        <div class="facility-card">
-            <div class="facility-header">
-                <div>
-                    <h3>{{ f.name }} <small style="color: #666; font-size: 0.8em;">({{ f.type }})</small></h3>
-                    <p>{{ f.description if f.description else "설명 없음" }}</p>
-                </div>
-                
-                <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}">
-                    <input type="hidden" name="date" value="{{ selected_date }}">
-                    
-                    {% set is_sold_out = False %}
-                    {% if selected_date and availability_data %}
-                        {% if 'available' not in availability_data[f.id].values() %}
-                            {% set is_sold_out = True %}
-                        {% endif %}
-                    {% endif %}
-
-                    {% if not selected_date %}
-                        <button type="button" disabled>날짜를 선택해주세요</button>
-                    {% elif not is_reservable %}
-                         <button type="submit" disabled>예약 불가 (과거/오늘)</button>
-                    {% elif is_sold_out %}
-                        <button type="submit" disabled>예약 마감</button>
-                    {% else %}
-                        <button type="submit" class="btn-primary">상세보기 및 예약</button>
-                    {% endif %}
-                </form>
+        <!-- 카드 하단 영역: 상세 정보 및 액션 -->
+        <div class="card-body">
+            <div class="card-title-area">
+                {% if "연습" in f.type %}
+                <!-- 연습실 아이콘 -->
+                <svg class="type-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18V5l12-2v13" />
+                    <circle cx="6" cy="18" r="3" />
+                    <circle cx="18" cy="16" r="3" />
+                </svg>
+                {% else %}
+                <!-- 회의실/공용공간 아이콘 -->
+                <svg class="type-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                    <circle cx="9" cy="7" r="4" />
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                {% endif %}
+                <h3>{{ f.name }}</h3>
             </div>
 
+            <p class="description">{{ f.description if f.description else "활동을 위한 쾌적한 공간입니다." }}</p>
+
+            <!-- 예약 현황 바 (컨테이너 제거 후 바만 노출) -->
             {% if selected_date and availability_data %}
-            <div class="status-container">
-                <div class="legend">예약 현황 (09:00 ~ 18:00)</div>
-                <div class="status-bar">
-                    {% for h in range(9, 18) %}
-                        {% set status = availability_data[f.id][h] %}
-                        <div class="status-slot {{ status }}" title="{{ h }}:00 ~ {{ h+1 }}:00">
-                            {{ h }}
-                        </div>
-                    {% endfor %}
+            <div class="status-bar">
+                {% for h in range(9, 18) %}
+                {% set status = availability_data[f.id][h] %}
+                <div class="status-slot {{ status }}" title="{{ h }}:00 ~ {{ h+1 }}:00">
+                    {{ "%02d"|format(h) }}
                 </div>
-                <div style="font-size: 11px; margin-top: 4px; color: #888;">
-                    <span style="display:inline-block; width:10px; height:10px; background:#4CAF50;"></span> 예약가능
-                    <span style="display:inline-block; width:10px; height:10px; background:#ccc; margin-left:10px;"></span> 예약마감
-                </div>
+                {% endfor %}
             </div>
             {% endif %}
-        </div>
-        {% endfor %}
-    </div>
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-</body>
-</html>
+            <!-- 대관 신청 버튼 폼 -->
+            <form method="get" action="{{ url_for('reserve', facility_id=f.id) }}">
+                <input type="hidden" name="date" value="{{ selected_date }}">
+
+                {% set is_sold_out = False %}
+                {% if selected_date and availability_data %}
+                {% if 'available' not in availability_data[f.id].values() %}
+                {% set is_sold_out = True %}
+                {% endif %}
+                {% endif %}
+
+                {% if not selected_date %}
+                <button type="button" class="btn btn-check btn-full" disabled>날짜 선택 필요</button>
+                {% elif not is_reservable %}
+                <button type="submit" class="btn btn-check btn-full" disabled>예약 불가</button>
+                {% elif is_sold_out %}
+                <button type="submit" class="btn btn-check btn-full" disabled>예약 마감</button>
+                {% else %}
+                <button type="submit" class="btn btn-primary btn-full">대관 신청하기</button>
+                {% endif %}
+            </form>
+        </div>
+    </article>
+    {% endfor %}
+</div>
+{% endblock %}

@@ -1,38 +1,367 @@
-/* 기본 레이아웃 */
-body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
-hr { margin: 20px 0; border: 0; border-top: 1px solid #ddd; }
+@import url('https://cdn.jsdelivr.gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 
-/* 버튼 디자인 */
-button, .btn { padding: 10px 15px; cursor: pointer; text-decoration: none; border-radius: 4px; border: 1px solid #ccc; background-color: #f8f9fa; color: #333; display: inline-block;}
-button:disabled { background-color: #ccc; color: #666; cursor: not-allowed; border: 1px solid #999; }
-.btn-primary { background-color: #007bff; color: white; border: none; }
-.btn-danger { background-color: #dc3545; color: white; border: none; padding: 5px 10px; font-size: 14px;}
+:root {
+    --primary-color: #0052cc;
+    --primary-hover: #003d99;
+    --admin-color: #4a5568;
+    --admin-hover: #2d3748;
+    --bg-color: #f8fafc;
+    --card-bg: #ffffff;
+    --text-main: #1a202c;
+    --text-sub: #4a5568;
+    --border-color: #e2e8f0;
+    --success: #38a169;
+    --warning: #ed8936;
+    --danger: #e53e3e;
+    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+}
 
-/* 메인 페이지 - 검색창 및 시설 카드 */
-.header-top { display: flex; justify-content: space-between; align-items: center; }
-.search-box { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-input[type="date"], input[type="text"], input[type="number"] { padding: 8px; font-size: 16px; border-radius: 4px; border: 1px solid #ccc; margin-bottom: 10px;}
-.facility-card { border: 1px solid #ddd; margin: 20px 0; padding: 20px; border-radius: 8px; }
-.facility-header { display: flex; justify-content: space-between; align-items: center; }
+* {
+    box-sizing: border-box;
+    font-family: 'Pretendard', sans-serif;
+}
 
-/* 예약 현황 바 */
-.status-container { margin-top: 15px; }
-.status-bar { display: flex; height: 30px; margin-top: 5px; }
-.status-slot { flex: 1; border-right: 1px solid #fff; text-align: center; color: white; font-size: 10px; line-height: 30px; }
-.status-slot:last-child { border-right: none; }
-.available { background-color: #4CAF50; } 
-.booked { background-color: #ccc; }       
-.legend { font-size: 12px; color: #666; margin-bottom: 5px; }
+body {
+    background-color: var(--bg-color);
+    color: var(--text-main);
+    margin: 0;
+    padding: 0;
+    line-height: 1.5;
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
 
-/* 예약 페이지 - 시간 그리드 */
-.time-grid { display: flex; gap: 10px; flex-wrap: wrap; }
-.time-slot { border: 1px solid #ccc; padding: 10px; text-align: center; cursor: pointer; border-radius: 4px;}
-.time-slot input { display: none; }
-.time-slot.disabled { background-color: #eee; color: #aaa; cursor: not-allowed; }
-.time-slot input:checked + span { font-weight: bold; color: #007bff; }
+.container {
+    width: 100%;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 15px 20px;
+    flex: 1;
+}
 
-/* 예약 조회 내역 리스트 */
-.reservation-list { margin-top: 20px; }
-.reservation-item { border: 1px solid #ddd; padding: 15px; border-radius: 8px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;}
-.reservation-info p { margin: 5px 0; }
-.flash-messages { color: #dc3545; font-weight: bold; margin-bottom: 15px; list-style-type: none; padding-left: 0;}
+.header-top {
+    width: 100%;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--card-bg);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.header-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0;
+}
+
+.logo-img {
+    height: 48px;
+    display: block;
+    transition: opacity 0.2s;
+}
+
+.logo-img:hover {
+    opacity: 0.8;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+footer {
+    background: #1a202c;
+    color: #e2e8f0;
+    padding: 10px 0;
+    margin-top: auto;
+}
+
+.footer-content {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 40px;
+    margin: 0 0 5px;
+}
+
+.footer-info h3 {
+    color: white;
+    font-size: 1.25rem;
+    margin-bottom: 16px;
+}
+
+.footer-info p {
+    margin: 6px 0;
+    color: #a0aec0;
+    font-size: 0.9rem;
+}
+
+.footer-contact {
+    text-align: right;
+}
+
+.footer-copyright {
+    margin-top: 5px;
+    padding-top: 15px;
+    border-top: 1px solid #2d3748;
+    text-align: center;
+    font-size: 0.85rem;
+    color: #718096;
+}
+
+button,
+.btn {
+    height: 40px;
+    padding: 0 18px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.btn-primary {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+    background-color: var(--primary-hover);
+}
+
+.btn-check {
+    background: white;
+    border: 1.5px solid var(--primary-color);
+    color: var(--primary-color);
+}
+
+.btn-check:hover {
+    background: #f0f7ff;
+}
+
+.btn-admin {
+    background-color: var(--admin-color);
+    color: white;
+}
+
+.btn-admin:hover {
+    background-color: var(--admin-hover);
+}
+
+button:disabled {
+    background-color: #e2e8f0;
+    color: #a0aec0;
+    cursor: not-allowed;
+    border: none;
+}
+
+.search-box {
+    background: linear-gradient(135deg, #0052cc 0%, #003d99 100%);
+    color: white;
+    text-align: center;
+    padding: 30px 20px;
+    border-radius: 16px;
+    margin: 0 0 30px;
+    box-shadow: var(--shadow);
+}
+
+.search-box h3 {
+    color: white;
+    font-size: 1.6rem;
+    margin: 0;
+}
+
+.search-box p {
+    color: rgba(255, 255, 255, 0.85);
+    margin: 1.2rem 0 1.8rem;
+    font-size: 1rem;
+}
+
+.search-form {
+    display: flex;
+    justify-content: center;
+}
+
+.search-box input[type="date"] {
+    width: 200px;
+    padding: 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-main);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+.flash-messages {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 25px 0;
+}
+
+.flash-messages li {
+    background: #fff5f5;
+    color: #c53030;
+    padding: 14px 18px;
+    border-radius: 10px;
+    border: 1px solid #feb2b2;
+    font-size: 0.9rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    box-shadow: 0 2px 4px rgba(229, 62, 62, 0.05);
+}
+
+.flash-messages li::before {
+    content: "ⓘ";
+    margin-right: 10px;
+    font-size: 1.1rem;
+}
+
+.facility-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+}
+
+.facility-card {
+    background: var(--card-bg);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border-color);
+    display: flex;
+    flex-direction: column;
+}
+
+.card-image {
+    width: 100%;
+    height: 180px;
+    background-color: #f1f5f9;
+    position: relative;
+}
+
+.card-image img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.facility-type-badge {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: white;
+    color: var(--primary-color);
+    padding: 4px 12px;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    border: 1px solid var(--border-color);
+}
+
+.card-body {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.card-title-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.card-title-area h3 {
+    margin: 0;
+    font-size: 1.2rem;
+}
+
+.type-icon {
+    width: 18px;
+    height: 18px;
+    color: var(--primary-color);
+}
+
+.description {
+    color: var(--text-sub);
+    font-size: 0.85rem;
+    margin: 10px 0 15px;
+    line-height: 1.5;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+
+.status-bar {
+    display: flex;
+    height: 24px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: #e2e8f0;
+    margin-bottom: 15px;
+}
+
+.status-slot {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.9);
+    border-right: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.status-slot.available {
+    background-color: var(--success);
+}
+
+.status-slot.booked {
+    background-color: #cbd5e0;
+    color: #718096;
+}
+
+.btn-full {
+    width: 100%;
+    height: 44px;
+}
+
+@media (max-width: 600px) {
+    .container {
+        padding: 12px 15px;
+    }
+
+    .header-container {
+        padding: 0;
+    }
+
+    .logo-img {
+        height: 38px;
+    }
+
+    .btn {
+        padding: 0 12px;
+        font-size: 0.8rem;
+    }
+
+    .footer-content {
+        grid-template-columns: 1fr;
+        gap: 24px;
+        text-align: center;
+    }
+
+    .footer-contact {
+        text-align: center;
+    }
+}

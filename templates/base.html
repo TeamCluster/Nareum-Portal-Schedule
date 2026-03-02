@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ SERVICE_NAME }}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+
+<body>
+    <header class="header-top">
+        <div class="container">
+            <div class="header-container">
+                <a href="/">
+                    <img src="{{ url_for('static', filename='img/logo_nareum.png') }}" alt="나름센터 로고" class="logo-img">
+                </a>
+                <nav class="header-actions">
+                    <a href="{{ url_for('check') }}" class="btn btn-check">내 예약 확인</a>
+                    <a href="{{ url_for('admin') }}" class="btn btn-admin">관리자 설정</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-info">
+                    <h3>나름청소년활동센터</h3>
+                    <p>주소: 경기도 광명시 철산로 56, 6층</p>
+                    <p>전화: 02-2060-1318 | 이메일: nareum@gm.go.kr</p>
+                </div>
+                <div class="footer-contact">
+                    <p><strong>운영 시간</strong></p>
+                    <p>화-금: 09:00 ~ 20:00</p>
+                    <p>토-일: 09:00 ~ 18:00</p>
+                    <p>월요일 및 공휴일 휴무</p>
+                </div>
+            </div>
+            <div class="footer-copyright">
+                &copy; 2026 Cluster. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+
+</html>

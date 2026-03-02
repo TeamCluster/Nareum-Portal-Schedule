@@ -1,13 +1,26 @@
-document.addEventListener("DOMContentLoaded", function() {
-    
-    // 1. [index.html] 페이지 로드 시 날짜가 없으면 자동으로 오늘 날짜 세팅
+document.addEventListener("DOMContentLoaded", function () {
+
+    // 1. [index.html] 한국 시간(KST) 기준으로 오늘 이전 날짜 선택 방지
     const dateInput = document.getElementById("dateInput");
-    if (dateInput && !dateInput.value) {
-        const today = new Date();
-        const yyyy = today.getFullYear();
-        const mm = String(today.getMonth() + 1).padStart(2, '0');
-        const dd = String(today.getDate()).padStart(2, '0');
-        // dateInput.value = `${yyyy}-${mm}-${dd}`; // 필요 시 주석 해제하여 사용
+    if (dateInput) {
+        // 한국 시간 계산 (UTC+9)
+        const now = new Date();
+        const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+        const kstTime = new Date(utc + (9 * 60 * 60000));
+
+        const yyyy = kstTime.getFullYear();
+        const mm = String(kstTime.getMonth() + 1).padStart(2, '0');
+        const dd = String(kstTime.getDate()).padStart(2, '0');
+
+        const todayStr = `${yyyy}-${mm}-${dd}`;
+
+        // min 속성 설정 (오늘 이전 날짜 비활성화)
+        dateInput.setAttribute("min", todayStr);
+
+        // 페이지 로드 시 날짜가 비어있으면 오늘 날짜로 자동 세팅 (선택 사항)
+        if (!dateInput.value) {
+            dateInput.value = todayStr; 
+        }
     }
 
     // 2. [reserve.html] 공지 동의 체크박스 상태에 따른 버튼 활성화 토글
@@ -15,11 +28,8 @@ document.addEventListener("DOMContentLoaded", function() {
     const submitBtn = document.getElementById("submitBtn");
 
     if (agreeCheckbox && submitBtn) {
-        // 초기 로드 시 확인 (검증 실패로 돌아왔을 때 대비)
         submitBtn.disabled = !agreeCheckbox.checked;
-
-        // 체크박스 변경 시 이벤트 리스너
-        agreeCheckbox.addEventListener("change", function() {
+        agreeCheckbox.addEventListener("change", function () {
             submitBtn.disabled = !agreeCheckbox.checked;
         });
     }
