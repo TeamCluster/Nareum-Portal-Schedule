@@ -278,7 +278,7 @@ button:disabled {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 6px;
+    margin: 0;
 }
 
 .card-title-area h3 {

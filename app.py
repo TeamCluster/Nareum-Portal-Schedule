@@ -229,11 +229,11 @@ if __name__ == "__main__":
         db.create_all()
         if not Facility.query.first():
             facilities = [
-                Facility(name="활력충전터", type="연습실", description="음악 연습 공간"),
-                Facility(name="창의키움터", type="연습실", description="학습 공간"),
-                Facility(name="탐구개발터", type="회의실", description="3D 프린터 및 회의"),
-                Facility(name="상상이룸터", type="회의실"),
-                Facility(name="생각나눔터", type="회의실")
+                Facility(name="활력충전터", type="연습실", image_url="/static/img/room001.jpg", description="밴드/음악 연습 공간"),
+                Facility(name="창의키움터", type="활동실", image_url="/static/img/room002.jpg", description="과학 활동 공간"),
+                Facility(name="탐구개발터", type="활동실", image_url="/static/img/room003.jpg", description="3D 프린터가 있는 오픈LAB실"),
+                Facility(name="상상이룸터", type="연습실", image_url="/static/img/room004.jpg", description="댄스 연습 특화 공간"),
+                Facility(name="생각나눔터", type="회의실", image_url="/static/img/room005.jpg", description="회의 공간"),
             ]
             db.session.add_all(facilities)
             db.session.commit()
