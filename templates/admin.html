@@ -4,34 +4,95 @@
     <meta charset="UTF-8">
     <title>관리자 페이지 - 대관 관리</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
     <style>
         .admin-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 30px; }
         .badge-pending { background-color: #ffc107; color: #000; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
-        .badge-confirmed { background-color: #28a745; color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background-color: #f4f4f4; }
         .action-btns { display: flex; gap: 5px; }
+
+        /* =========================================================
+           [캘린더 커스텀 스타일] Month 뷰와 Week 뷰 완벽 분리
+        ========================================================= */
+        #calendar { max-width: 100%; margin: 0 auto; background: white; padding: 10px; border-radius: 8px;}
+        
+        /* [공통] 클릭 마우스 커서 및 날짜축 글씨 크기 */
+        .fc-event { cursor: pointer; }
+        .fc-timegrid-slot-label-cushion { font-size: 13px !important; font-weight: bold; color: #555; }
+        .fc-col-header-cell-cushion { font-size: 14px !important; padding: 8px 0 !important; color: #333; }
+
+        /* ---------------------------------------------------------
+           1. Month 뷰 (월간) 전용 스타일: 원래 모습 유지 + 글씨 안 잘림
+        --------------------------------------------------------- */
+        .fc-daygrid-event {
+            white-space: normal !important; /* 글씨가 칸을 넘어가면 자동으로 줄바꿈 */
+            word-break: keep-all; /* 단어 단위로 깔끔하게 줄바꿈 */
+            margin-bottom: 2px !important;
+        }
+        .fc-daygrid-event .fc-event-title {
+            white-space: normal !important;
+            font-size: 12px !important;
+            color: #333 !important; /* 기본 검정 계열 글씨로 복구 */
+            font-weight: normal !important;
+        }
+
+        /* ---------------------------------------------------------
+           2. Week 뷰 (주간) 전용 스타일: 상하 2배 넓이 + 흰색 굵은 글씨
+        --------------------------------------------------------- */
+        /* 주간 뷰 높이 2배 뻥튀기 (기본값 약 24px -> 60px) */
+        .fc-timegrid-slot { height: 60px !important; } 
+
+        .fc-timegrid-event {
+            border: none !important;
+            border-radius: 4px !important;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+            padding: 2px 4px !important;
+        }
+        .fc-timegrid-event .fc-event-title {
+            font-weight: bold !important;
+            font-size: 12px !important;
+            color: #ffffff !important; /* 주간 뷰에서만 흰색 텍스트 적용 */
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.6);
+            white-space: normal !important;
+            overflow: hidden;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            line-height: 1.3;
+        }
+        .fc-timegrid-event .fc-event-time {
+            font-size: 11px !important;
+            color: rgba(255,255,255,0.9) !important; /* 주간 뷰에서만 적용 */
+            margin-bottom: 2px;
+            font-weight: normal !important;
+        }
+        
+        .fc-event:hover { opacity: 0.85; transition: 0.2s; }
     </style>
 </head>
-<body style="max-width: 1000px;">
-    <div class="header-top">
-        <h1>관리자 대시보드</h1>
-        <a href="{{ url_for('index') }}" class="btn">메인으로 돌아가기</a>
+<body style="max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
+    <div class="header-top" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <h1>admin</h1>
+        <div>
+            <a href="{{ url_for('admin_add') }}" class="btn btn-primary" style="margin-right: 10px; padding: 10px 15px; font-weight: bold;">+ 새 예약 수동 추가</a>
+            <a href="{{ url_for('index') }}" class="btn" style="padding: 10px 15px;">메인 화면</a>
+        </div>
     </div>
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <ul class="flash-messages">
+        <div class="flash-messages" style="background: #e6fffa; border: 1px solid #38b2ac; color: #2c7a7b; padding: 15px; border-radius: 5px; margin-bottom: 20px; font-weight: bold;">
         {% for message in messages %}
-          <li>{{ message }}</li>
+          <p style="margin: 0;">{{ message }}</p>
         {% endfor %}
-        </ul>
+        </div>
       {% endif %}
     {% endwith %}
 
     <div class="admin-section">
-        <h2>승인 대기 중인 예약</h2>
+        <h2>승인 대기 중인 예약 ({{ pending_reservations|length }}건)</h2>
         {% if pending_reservations %}
         <table>
             <thead>
@@ -39,24 +100,22 @@
                     <th>시설명</th>
                     <th>날짜 / 시간</th>
                     <th>신청인 (연락처)</th>
-                    <th>상태</th>
                     <th>작업</th>
                 </tr>
             </thead>
             <tbody>
                 {% for res in pending_reservations %}
                 <tr>
-                    <td>{{ res.facility.name }}</td>
-                    <td>{{ res.start_time.strftime('%Y-%m-%d %H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</td>
-                    <td>{{ res.applicant_name }}<br><small>{{ res.applicant_contact }}</small></td>
-                    <td><span class="badge-pending">승인 대기</span></td>
+                    <td><strong>{{ res.facility.name }}</strong></td>
+                    <td>{{ res.start_time.strftime('%Y-%m-%d') }}<br>{{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</td>
+                    <td><a href="{{ url_for('admin_edit', res_id=res.id) }}" style="font-weight: bold; color: #007bff;">{{ res.applicant_name }}</a><br><small>{{ res.applicant_contact }}</small></td>
                     <td>
                         <div class="action-btns">
                             <form method="post" action="{{ url_for('admin_approve', res_id=res.id) }}">
                                 <button type="submit" class="btn-primary" style="padding: 5px 10px; font-size: 13px;">승인</button>
                             </form>
-                            <form method="post" action="{{ url_for('admin_delete', res_id=res.id) }}" onsubmit="return confirm('이 예약을 거절/삭제하시겠습니까?');">
-                                <button type="submit" class="btn-danger">거절</button>
+                            <form method="post" action="{{ url_for('admin_delete', res_id=res.id) }}" onsubmit="return confirm('이 예약을 정말 취소/거절하시겠습니까?');">
+                                <button type="submit" class="btn-danger" style="padding: 5px 10px; font-size: 13px;">거절</button>
                             </form>
                         </div>
                     </td>
@@ -65,53 +124,50 @@
             </tbody>
         </table>
         {% else %}
-        <p>승인 대기 중인 예약이 없습니다.</p>
+        <p style="color: #666; text-align: center; padding: 20px;">승인 대기 중인 예약이 없습니다.</p>
         {% endif %}
     </div>
 
     <div class="admin-section">
-        <h2>날짜별 예약 조회 및 관리</h2>
-        <form method="get" action="{{ url_for('admin') }}" style="margin-bottom: 15px;">
-            <input type="date" name="date" value="{{ target_date }}" onchange="this.form.submit()">
-        </form>
-
-        {% if date_reservations %}
-        <table>
-            <thead>
-                <tr>
-                    <th>시설명</th>
-                    <th>시간</th>
-                    <th>신청인 (연락처)</th>
-                    <th>상태</th>
-                    <th>작업</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for res in date_reservations %}
-                <tr>
-                    <td>{{ res.facility.name }}</td>
-                    <td>{{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</td>
-                    <td>{{ res.applicant_name }} ({{ res.applicant_contact }})</td>
-                    <td>
-                        {% if res.status == 'pending' %}<span class="badge-pending">대기</span>
-                        {% elif res.status == 'confirmed' %}<span class="badge-confirmed">확정</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <div class="action-btns">
-                            <a href="{{ url_for('admin_edit', res_id=res.id) }}" class="btn" style="padding: 5px 10px; font-size: 13px;">수정</a>
-                            <form method="post" action="{{ url_for('admin_delete', res_id=res.id) }}" onsubmit="return confirm('이 예약을 삭제하시겠습니까?');">
-                                <button type="submit" class="btn-danger">삭제</button>
-                            </form>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p>{{ target_date }} 일자의 활성화된 예약이 없습니다.</p>
-        {% endif %}
+        <h2>전체 대관 일정표 (캘린더 뷰)</h2>
+        <p style="color: #666; margin-bottom: 15px;">※ 일정을 클릭하면 상세 조회 및 수정 화면으로 이동합니다.</p>
+        <div id="calendar"></div>
     </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var calendarEl = document.getElementById('calendar');
+            var calendar = new FullCalendar.Calendar(calendarEl, {
+                initialView: 'timeGridWeek', 
+                locale: 'ko',
+                headerToolbar: {
+                    left: 'prev,next today',
+                    center: 'title',
+                    right: 'dayGridMonth,timeGridWeek' 
+                },
+                
+                // 디스플레이 핵심 설정 (이전의 강제 속성 삭제)
+                allDaySlot: false,           
+                slotMinTime: '09:00:00',     
+                slotMaxTime: '18:00:00',     
+                
+                slotDuration: '01:00:00',    
+                slotLabelInterval: '01:00:00', 
+                
+                contentHeight: 'auto',       
+                nowIndicator: true,          
+                
+                events: '/admin/api/events', 
+
+                eventClick: function(info) {
+                    info.jsEvent.preventDefault();
+                    if (info.event.url) {
+                        window.location.href = info.event.url;
+                    }
+                }
+            });
+            calendar.render();
+        });
+    </script>
 </body>
 </html>

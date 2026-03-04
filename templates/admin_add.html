@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>관리자 임의 예약 추가</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="header-top">
+        <h1>예약 수동 추가 (관리자용)</h1>
+        <a href="{{ url_for('admin') }}" class="btn">뒤로 가기</a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class="flash-messages">
+        {% for message in messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <form method="post" class="facility-card">
+        <h2>1. 시설 및 날짜 선택</h2>
+        <label>시설 선택:
+            <select name="facility_id" id="facilitySelect" required>
+                <option value="">-- 시설을 선택하세요 --</option>
+                {% for f in facilities %}
+                    <option value="{{ f.id }}">{{ f.name }} ({{ f.type }})</option>
+                {% endfor %}
+            </select>
+        </label><br><br>
+        <label>예약 날짜: <input type="date" name="date" id="dateInput" required></label><br><br>
+
+        <hr>
+        <h2>2. 신청인 정보</h2>
+        이름: <input type="text" name="name" required><br>
+        연락처: <input type="text" name="contact" required placeholder="010-0000-0000"><br>
+        소속: <input type="text" name="school" required><br>
+        동아리: <input type="text" name="club"><br>
+
+        <hr>
+        <h2>3. 이용 일정 선택 (시간 선택)</h2>
+        <p>※ 시설과 날짜를 선택해야 시간표가 열립니다.</p>
+        <div class="time-grid" id="timeGrid">
+            {% for h in range(9, 18) %}
+                <label class="time-slot disabled" id="label-{{ h }}" style="pointer-events: none;">
+                    <input type="checkbox" name="time_slot" value="{{ h }}" class="time-checkbox" disabled>
+                    <span>{{ h }}:00</span><span class="status-msg"><br>(대기)</span>
+                </label>
+            {% endfor %}
+        </div>
+
+        <hr>
+        <h2>4. 이용 인원</h2>
+        초등: <input type="number" name="elementary" value="0" min="0"><br>
+        중등: <input type="number" name="middle" value="0" min="0"><br>
+        고등: <input type="number" name="high" value="0" min="0"><br>
+        후기청소년: <input type="number" name="teen" value="0" min="0"><br>
+        성인: <input type="number" name="adult" value="0" min="0"><br>
+
+        <hr>
+        <h2>5. 필요 물품</h2>
+        {% set equipments = ['앰프', '스피커', '마이크', '키보드'] %}
+        {% for item in equipments %}
+            <label style="margin-right: 15px;">
+                <input type="checkbox" name="equipment" value="{{ item }}">
+                {{ item }}
+            </label>
+        {% endfor %}
+        <br><br><br>
+
+        <button type="submit" class="btn-primary" style="width: 100%; padding: 15px; font-size: 18px;">즉시 예약 확정하기</button>
+    </form>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const facilitySelect = document.getElementById('facilitySelect');
+            const dateInput = document.getElementById('dateInput');
+            const checkboxes = document.querySelectorAll('.time-checkbox');
+
+            // 1. 예약 현황 불러와서 마감 처리하는 기존 함수
+            function updateTimeSlots() {
+                const facilityId = facilitySelect.value;
+                const dateVal = dateInput.value;
+
+                if (facilityId && dateVal) {
+                    fetch(`/admin/api/booked_times?facility_id=${facilityId}&date=${dateVal}`)
+                        .then(response => response.json())
+                        .then(bookedHours => {
+                            checkboxes.forEach(chk => {
+                                const hour = parseInt(chk.value);
+                                const label = document.getElementById(`label-${hour}`);
+                                const statusMsg = label.querySelector('.status-msg');
+                                
+                                if (bookedHours.includes(hour)) {
+                                    chk.disabled = true;
+                                    chk.checked = false;
+                                    label.classList.add('disabled');
+                                    label.style.pointerEvents = 'none';
+                                    statusMsg.innerHTML = '<br>(마감)';
+                                } else {
+                                    chk.disabled = false;
+                                    label.classList.remove('disabled');
+                                    label.style.pointerEvents = 'auto';
+                                    statusMsg.innerHTML = '';
+                                }
+                            });
+                        })
+                        .catch(error => console.error('Error:', error));
+                } else {
+                    checkboxes.forEach(chk => {
+                        const label = document.getElementById(`label-${chk.value}`);
+                        const statusMsg = label.querySelector('.status-msg');
+                        chk.disabled = true;
+                        chk.checked = false;
+                        label.classList.add('disabled');
+                        label.style.pointerEvents = 'none';
+                        statusMsg.innerHTML = '<br>(대기)';
+                    });
+                }
+            }
+
+            facilitySelect.addEventListener('change', updateTimeSlots);
+            dateInput.addEventListener('change', updateTimeSlots);
+
+            // ========================================================
+            // 2. [신규 추가] 중간 시간 자동 선택 및 마감 시간 포함 여부 검증
+            // ========================================================
+            checkboxes.forEach(chk => {
+                chk.addEventListener('change', function() {
+                    // 현재 체크되어 있는 체크박스들의 값을 모조리 가져옴
+                    let checkedVals = [];
+                    document.querySelectorAll('.time-checkbox:checked').forEach(c => checkedVals.push(parseInt(c.value)));
+
+                    if (checkedVals.length > 1) {
+                        let minVal = Math.min(...checkedVals);
+                        let maxVal = Math.max(...checkedVals);
+
+                        // 내가 선택한 시작과 끝 사이에 '마감(disabled)'된 시간이 끼어있는지 검사
+                        let hasDisabled = false;
+                        for (let i = minVal; i <= maxVal; i++) {
+                            let box = document.querySelector(`.time-checkbox[value="${i}"]`);
+                            if (box && box.disabled) {
+                                hasDisabled = true;
+                                break;
+                            }
+                        }
+
+                        // 마감된 시간이 끼어있다면 방금 한 클릭을 강제 취소시키고 경고!
+                        if (hasDisabled) {
+                            alert("선택하신 시간대 사이에 이미 마감된 예약이 끼어있습니다. 연속된 빈 시간만 선택 가능합니다.");
+                            this.checked = false; 
+                            return;
+                        }
+
+                        // 이상이 없다면, min과 max 사이의 모든 빈 체크박스를 체크 상태로 시각적 동기화
+                        for (let i = minVal; i <= maxVal; i++) {
+                            let box = document.querySelector(`.time-checkbox[value="${i}"]`);
+                            if (box && !box.checked) {
+                                box.checked = true;
+                            }
+                        }
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

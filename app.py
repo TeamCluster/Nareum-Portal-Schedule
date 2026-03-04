@@ -1,8 +1,8 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from models import db, Facility, Reservation
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-import os, sys, io, re
+import os, sys, io
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -37,7 +37,6 @@ def index():
             end_of_day = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
 
             for facility in facilities:
-                # [수정] 대기(pending) 중인 예약도 다른 사람이 예약하지 못하도록 자리 차지
                 reservations = Reservation.query.filter(
                     Reservation.facility_id == facility.id,
                     Reservation.start_time >= start_of_day,
@@ -79,7 +78,6 @@ def reserve(facility_id):
     selected_date_obj = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
     facility = Facility.query.get_or_404(facility_id)
 
-    # [수정] 대기 중인 예약도 예약 불가능한 시간으로 처리
     existing_res = Reservation.query.filter(
         Reservation.facility_id == facility_id,
         Reservation.start_time >= datetime.combine(selected_date_obj, datetime.min.time()),
@@ -101,7 +99,16 @@ def reserve(facility_id):
         club = request.form.get("club")
         selected_hours = request.form.getlist("time_slot")
         
-        # 중복 방지 체크 시에도 pending 포함
+        # JSON 컬럼을 위해 딕셔너리와 리스트 형태로 수집
+        participants = {
+            "elementary": int(request.form.get("elementary", 0)),
+            "middle": int(request.form.get("middle", 0)),
+            "high": int(request.form.get("high", 0)),
+            "teen": int(request.form.get("teen", 0)),
+            "adult": int(request.form.get("adult", 0))
+        }
+        equipment_list = request.form.getlist("equipment")
+        
         start_hour = sorted([int(h) for h in selected_hours])[0]
         end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
         start_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
@@ -118,7 +125,6 @@ def reserve(facility_id):
             flash("선택하신 시간에 이미 다른 예약이 진행 중입니다.")
             return redirect(url_for('reserve', facility_id=facility_id, date=selected_date_str))
 
-        # [수정] 새 예약은 기본적으로 'pending(승인 대기)' 상태로 저장
         new_res = Reservation(
             facility_id=facility_id,
             applicant_name=name,
@@ -127,7 +133,8 @@ def reserve(facility_id):
             applicant_club=club,
             start_time=start_dt,
             end_time=end_dt,
-            participant_info={"elementary": 0}, # 간략화 (기존 딕셔너리 로직 유지)
+            participant_info=participants,       # 딕셔너리 그대로 저장
+            requested_equipment=equipment_list,  # 리스트 그대로 저장
             status="pending" 
         )
         db.session.add(new_res)
@@ -144,7 +151,6 @@ def reservation_complete(res_id):
 
 @app.route('/check', methods=['GET', 'POST'])
 def check():
-    # [수정] pending과 confirmed 모두 조회하도록 변경
     reservations = None
     search_name = search_contact = None
     if request.method == 'POST':
@@ -160,7 +166,6 @@ def check():
 @app.route('/cancel/<int:res_id>', methods=['POST'])
 def cancel(res_id):
     res = Reservation.query.get_or_404(res_id)
-    # 대기 중(pending)이거나 확정(confirmed)된 예약만 취소 가능
     if res.status in ['confirmed', 'pending']:
         res.status = 'cancelled'
         db.session.commit()
@@ -171,28 +176,63 @@ def cancel(res_id):
     return redirect(url_for('check'))
 
 # ==========================================
-# [추가] 관리자 (Admin) 라우트
+# 관리자 (Admin) 라우트
 # ==========================================
 
 @app.route('/admin')
 def admin():
-    # 1. 승인 대기 중인 모든 예약 조회
+    # 달력 뷰는 API로 처리하므로 대기 중인 예약만 템플릿에 전달
     pending_reservations = Reservation.query.filter_by(status='pending').order_by(Reservation.start_time).all()
+    return render_template('admin.html', pending_reservations=pending_reservations)
+
+@app.route('/admin/api/events')
+def admin_api_events():
+    reservations = Reservation.query.filter(Reservation.status != 'cancelled').all()
+    events = []
+    for res in reservations:
+        color = '#ff9800' if res.status == 'pending' else '#4CAF50'
+        events.append({
+            'id': res.id,
+            'title': f"[{res.facility.name}] {res.applicant_name}",
+            'start': res.start_time.isoformat(),
+            'end': res.end_time.isoformat(),
+            'url': url_for('admin_edit', res_id=res.id),
+            'color': color
+        })
+    return jsonify(events)
+
+# [추가] 관리자 수동 예약 시, 해당 날짜의 예약된 시간 리스트를 반환하는 API
+@app.route('/admin/api/booked_times')
+def api_booked_times():
+    facility_id = request.args.get('facility_id', type=int)
+    date_str = request.args.get('date')
     
-    # 2. 특정 날짜 조회 (기본값: 오늘)
-    target_date_str = request.args.get('date', datetime.today().strftime('%Y-%m-%d'))
-    target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-    
+    if not facility_id or not date_str:
+        return jsonify([])
+
+    try:
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return jsonify([])
+
     start_of_day = datetime.combine(target_date, datetime.min.time())
     end_of_day = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
-    
-    date_reservations = Reservation.query.filter(
+
+    # 승인 대기(pending) 또는 확정(confirmed)된 예약 조회
+    reservations = Reservation.query.filter(
+        Reservation.facility_id == facility_id,
         Reservation.start_time >= start_of_day,
         Reservation.start_time < end_of_day,
-        Reservation.status != "cancelled"
-    ).order_by(Reservation.start_time).all()
+        Reservation.status.in_(["confirmed", "pending"])
+    ).all()
 
-    return render_template('admin.html', pending_reservations=pending_reservations, date_reservations=date_reservations, target_date=target_date_str)
+    booked = []
+    for res in reservations:
+        for h in range(res.start_time.hour, res.end_time.hour):
+            booked.append(h)
+            
+    # 중복 제거 후 리스트로 반환
+    return jsonify(list(set(booked)))
 
 @app.route('/admin/approve/<int:res_id>', methods=['POST'])
 def admin_approve(res_id):
@@ -205,7 +245,7 @@ def admin_approve(res_id):
 @app.route('/admin/delete/<int:res_id>', methods=['POST'])
 def admin_delete(res_id):
     res = Reservation.query.get_or_404(res_id)
-    res.status = 'cancelled' # 삭제 대신 취소 상태로 변경 (Soft Delete)
+    res.status = 'cancelled'
     db.session.commit()
     flash(f"{res.applicant_name}님의 예약이 취소(삭제) 처리되었습니다.")
     return redirect(request.referrer or url_for('admin'))
@@ -213,16 +253,96 @@ def admin_delete(res_id):
 @app.route('/admin/edit/<int:res_id>', methods=['GET', 'POST'])
 def admin_edit(res_id):
     res = Reservation.query.get_or_404(res_id)
+    
     if request.method == 'POST':
         res.applicant_name = request.form.get('name')
         res.applicant_contact = request.form.get('contact')
         res.applicant_school = request.form.get('school')
+        res.applicant_club = request.form.get('club')
+        
+        participants = {
+            "elementary": int(request.form.get("elementary", 0)),
+            "middle": int(request.form.get("middle", 0)),
+            "high": int(request.form.get("high", 0)),
+            "teen": int(request.form.get("teen", 0)),
+            "adult": int(request.form.get("adult", 0))
+        }
+        res.participant_info = participants
+        
+        equipment_list = request.form.getlist("equipment")
+        res.requested_equipment = equipment_list
+        
         res.status = request.form.get('status')
         db.session.commit()
         flash("예약 정보가 성공적으로 수정되었습니다.")
+        return redirect(url_for('admin_edit', res_id=res.id))
+        
+    participants = res.participant_info if res.participant_info else {}
+    equipments_list = res.requested_equipment if res.requested_equipment else []
+
+    return render_template('admin_edit.html', res=res, participants=participants, equipments_list=equipments_list)
+
+@app.route('/admin/add', methods=['GET', 'POST'])
+def admin_add():
+    facilities = Facility.query.all()
+    if request.method == 'POST':
+        facility_id = request.form.get("facility_id")
+        date_str = request.form.get("date")
+        
+        # 1. 시간 계산 로직 (체크박스)
+        selected_hours = request.form.getlist("time_slot")
+        if not selected_hours:
+            flash("이용 시간을 하나 이상 선택해주세요.")
+            return redirect(request.url)
+            
+        start_hour = sorted([int(h) for h in selected_hours])[0]
+        end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+        
+        target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        start_dt = datetime.combine(target_date, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
+        end_dt = datetime.combine(target_date, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
+
+        # 2. 중복 예약 방지 확인
+        overlap = Reservation.query.filter(
+            Reservation.facility_id == facility_id,
+            Reservation.start_time < end_dt, 
+            Reservation.end_time > start_dt,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).first()
+
+        if overlap:
+            flash("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
+            return redirect(request.url)
+
+        # 3. 인원 및 물품 수집
+        participants = {
+            "elementary": int(request.form.get("elementary", 0)),
+            "middle": int(request.form.get("middle", 0)),
+            "high": int(request.form.get("high", 0)),
+            "teen": int(request.form.get("teen", 0)),
+            "adult": int(request.form.get("adult", 0))
+        }
+        equipment_list = request.form.getlist("equipment")
+
+        # 4. 예약 확정 저장
+        new_res = Reservation(
+            facility_id=facility_id,
+            applicant_name=request.form.get("name"),
+            applicant_contact=request.form.get("contact"),
+            applicant_school=request.form.get("school"),
+            applicant_club=request.form.get("club"),
+            start_time=start_dt,
+            end_time=end_dt,
+            participant_info=participants, 
+            requested_equipment=equipment_list, 
+            status="confirmed" # 관리자가 수동 추가하는 것이므로 즉시 확정 상태로 설정
+        )
+        db.session.add(new_res)
+        db.session.commit()
+        flash("관리자 권한으로 예약을 성공적으로 추가했습니다.")
         return redirect(url_for('admin'))
         
-    return render_template('admin_edit.html', res=res)
+    return render_template('admin_add.html', facilities=facilities)
 
 if __name__ == "__main__":
     with app.app_context():
