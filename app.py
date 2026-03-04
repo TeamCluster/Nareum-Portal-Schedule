@@ -322,6 +322,9 @@ def admin_add():
             "teen": int(request.form.get("teen", 0)),
             "adult": int(request.form.get("adult", 0))
         }
+        if sum(participants.values()) == 0:
+            flash("이용 인원은 최소 1명 이상이어야 합니다.")
+            return redirect(request.url)
         equipment_list = request.form.getlist("equipment")
 
         # 4. 예약 확정 저장
