@@ -89,11 +89,29 @@
             <h4>3. 관리자 제어 (상태 변경)</h4>
             <div class="form-group">
                 <label>현재 예약 상태</label>
-                <select name="status" style="padding: 10px; font-size: 16px; border: 2px solid #007bff; border-radius: 4px;">
+                <select name="status" id="statusSelect" onchange="toggleReasonInput()" style="padding: 10px; font-size: 16px; border: 2px solid #007bff; border-radius: 4px;">
                     <option value="pending" {% if res.status == 'pending' %}selected{% endif %}>🟡 승인 대기 (Pending)</option>
                     <option value="confirmed" {% if res.status == 'confirmed' %}selected{% endif %}>🟢 예약 확정 (Confirmed)</option>
-                    <option value="cancelled" {% if res.status == 'cancelled' %}selected{% endif %}>🔴 예약 취소 (Cancelled)</option>
+                    <option value="cancelled" {% if res.status == 'cancelled' %}selected{% endif %}>⚪ 예약 취소 (Cancelled - Soft Delete)</option>
+                    <option value="rejected" {% if res.status == 'rejected' %}selected{% endif %}>🔴 승인 거절 (Rejected - Soft Delete)</option>
                 </select>
+            </div>
+
+            <!-- 승인 거절 시 사유 입력 그룹 -->
+            <div class="form-group" id="reasonGroup" style="display: {% if res.status == 'rejected' %}block{% else %}none{% endif %}; margin-top: 15px;">
+                <label>거절 사유 (신청자에게 표시됩니다)</label>
+                
+                <!-- [수정] 드롭다운과 텍스트 인풋을 분리하여 제공 -->
+                <select id="presetReasonSelect" onchange="updateCustomReasonInput()" style="margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;">
+                    <option value="">-- 자주 쓰는 사유 선택 --</option>
+                    <option value="해당 일시 시설 수용 인원 초과">해당 일시 시설 수용 인원 초과</option>
+                    <option value="타 활동 및 행사로 인한 중복">타 활동 및 행사로 인한 예약 중복</option>
+                    <option value="시설 수리 및 점검">시설 수리 및 점검</option>
+                    <option value="신청 양식 미비 및 조건 미달">신청 양식 미비 및 대관 조건 미달</option>
+                    <option value="custom">직접 입력...</option>
+                </select>
+                
+                <input type="text" id="actualRejectReason" name="reject_reason" value="{{ res.reject_reason if res.reject_reason else '' }}" placeholder="직접 사유를 입력하세요">
             </div>
         </div>
 
@@ -101,5 +119,31 @@
             <button type="submit" class="btn-primary" style="font-size: 18px; padding: 10px 30px;">저장 / 수정 완료</button>
         </div>
     </form>
+
+    <script>
+        function toggleReasonInput() {
+            var statusSelect = document.getElementById('statusSelect');
+            var reasonGroup = document.getElementById('reasonGroup');
+            
+            if (statusSelect.value === 'rejected') {
+                reasonGroup.style.display = 'block';
+            } else {
+                reasonGroup.style.display = 'none';
+            }
+        }
+
+        // 선택 상자에서 고르면 인풋 박스 값을 자동으로 바꿔줍니다.
+        function updateCustomReasonInput() {
+            var preset = document.getElementById('presetReasonSelect').value;
+            var actual = document.getElementById('actualRejectReason');
+            
+            if (preset === 'custom' || preset === '') {
+                actual.value = '';
+                actual.focus();
+            } else {
+                actual.value = preset;
+            }
+        }
+    </script>
 </body>
 </html>

@@ -38,12 +38,15 @@ class Reservation(db.Model):
     applicant_club = db.Column(db.String(100), nullable=True)
 
     status = db.Column(db.String(30), nullable=False, default='pending')
-    start_time = db.Column(db.DateTime, nullable=False) # 예약 시작 시간 (년-월-일 시:분:초)
-    end_time = db.Column(db.DateTime, nullable=False)   # 예약 종료 시간
+    start_time = db.Column(db.DateTime, nullable=False) 
+    end_time = db.Column(db.DateTime, nullable=False)   
     participant_info = db.Column(db.JSON, nullable=True)
     requested_equipment = db.Column(db.JSON, nullable=True)
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
 
+    # [추가] Soft Delete 및 거절 사유 컬럼
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False)
+    reject_reason = db.Column(db.String(255), nullable=True)
+
     def __repr__(self):
         return f'<Reservation {self.id} {self.start_time}~{self.end_time}>'
-# 주석

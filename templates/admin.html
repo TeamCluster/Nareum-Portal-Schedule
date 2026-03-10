@@ -18,30 +18,22 @@
         ========================================================= */
         #calendar { max-width: 100%; margin: 0 auto; background: white; padding: 10px; border-radius: 8px;}
         
-        /* [공통] 클릭 마우스 커서 및 날짜축 글씨 크기 */
         .fc-event { cursor: pointer; }
         .fc-timegrid-slot-label-cushion { font-size: 13px !important; font-weight: bold; color: #555; }
         .fc-col-header-cell-cushion { font-size: 14px !important; padding: 8px 0 !important; color: #333; }
 
-        /* ---------------------------------------------------------
-           1. Month 뷰 (월간) 전용 스타일: 원래 모습 유지 + 글씨 안 잘림
-        --------------------------------------------------------- */
         .fc-daygrid-event {
-            white-space: normal !important; /* 글씨가 칸을 넘어가면 자동으로 줄바꿈 */
-            word-break: keep-all; /* 단어 단위로 깔끔하게 줄바꿈 */
+            white-space: normal !important; 
+            word-break: keep-all; 
             margin-bottom: 2px !important;
         }
         .fc-daygrid-event .fc-event-title {
             white-space: normal !important;
             font-size: 12px !important;
-            color: #333 !important; /* 기본 검정 계열 글씨로 복구 */
+            color: #333 !important; 
             font-weight: normal !important;
         }
 
-        /* ---------------------------------------------------------
-           2. Week 뷰 (주간) 전용 스타일: 상하 2배 넓이 + 흰색 굵은 글씨
-        --------------------------------------------------------- */
-        /* 주간 뷰 높이 2배 뻥튀기 (기본값 약 24px -> 60px) */
         .fc-timegrid-slot { height: 60px !important; } 
 
         .fc-timegrid-event {
@@ -53,7 +45,7 @@
         .fc-timegrid-event .fc-event-title {
             font-weight: bold !important;
             font-size: 12px !important;
-            color: #ffffff !important; /* 주간 뷰에서만 흰색 텍스트 적용 */
+            color: #ffffff !important; 
             text-shadow: 1px 1px 2px rgba(0,0,0,0.6);
             white-space: normal !important;
             overflow: hidden;
@@ -64,12 +56,22 @@
         }
         .fc-timegrid-event .fc-event-time {
             font-size: 11px !important;
-            color: rgba(255,255,255,0.9) !important; /* 주간 뷰에서만 적용 */
+            color: rgba(255,255,255,0.9) !important; 
             margin-bottom: 2px;
             font-weight: normal !important;
         }
         
         .fc-event:hover { opacity: 0.85; transition: 0.2s; }
+
+        /* =========================================================
+           [모달(Modal) 창 스타일 추가]
+        ========================================================= */
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: #fff; margin: 10% auto; padding: 25px; border-radius: 8px; width: 400px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .close-btn { color: #aaa; float: right; font-size: 28px; font-weight: bold; cursor: pointer; line-height: 1; margin-top: -5px; }
+        .close-btn:hover { color: #333; }
+        .modal-form-group { margin-bottom: 15px; }
+        .modal-form-group select, .modal-form-group input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
     </style>
 </head>
 <body style="max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
@@ -114,9 +116,9 @@
                             <form method="post" action="{{ url_for('admin_approve', res_id=res.id) }}">
                                 <button type="submit" class="btn-primary" style="padding: 5px 10px; font-size: 13px;">승인</button>
                             </form>
-                            <form method="post" action="{{ url_for('admin_delete', res_id=res.id) }}" onsubmit="return confirm('이 예약을 정말 취소/거절하시겠습니까?');">
-                                <button type="submit" class="btn-danger" style="padding: 5px 10px; font-size: 13px;">거절</button>
-                            </form>
+                            <!-- [수정] 자바스크립트 모달 호출 버튼 -->
+                            <button type="button" class="btn-danger" style="padding: 5px 10px; font-size: 13px;" 
+                                onclick="openRejectModal({{ res.id }}, '{{ res.applicant_name }}')">거절</button>
                         </div>
                     </td>
                 </tr>
@@ -134,7 +136,84 @@
         <div id="calendar"></div>
     </div>
 
+    <!-- [추가] 예약 거절 모달 창 -->
+    <div id="rejectModal" class="modal">
+        <div class="modal-content">
+            <span class="close-btn" onclick="closeRejectModal()">&times;</span>
+            <h3 style="margin-top: 0; color: #d9534f;">예약 거절 처리</h3>
+            <p><strong id="rejectTargetName" style="color: #007bff;"></strong>님의 예약을 거절하시겠습니까?</p>
+            
+            <form id="rejectForm" method="post" action="">
+                <div class="modal-form-group">
+                    <label style="font-weight: bold; display: block; margin-bottom: 5px;">거절 사유 선택</label>
+                    <select id="presetReason" onchange="toggleCustomInput()">
+                        <option value="해당 일시 시설 수용 인원 초과">해당 일시 시설 수용 인원 초과</option>
+                        <option value="타 활동 및 행사로 인한 중복">타 활동 및 행사로 인한 예약 중복</option>
+                        <option value="시설 수리 및 점검">시설 수리 및 점검</option>
+                        <option value="신청 양식 미비 및 조건 미달">신청 양식 미비 및 대관 조건 미달</option>
+                        <option value="custom">직접 입력...</option>
+                    </select>
+                </div>
+                
+                <div class="modal-form-group" id="customInputDiv" style="display: none;">
+                    <label style="font-weight: bold; display: block; margin-bottom: 5px;">거절 사유 직접 입력</label>
+                    <input type="text" id="actualReason" name="reject_reason" placeholder="사유를 상세히 입력해주세요">
+                </div>
+
+                <div style="text-align: right; margin-top: 20px;">
+                    <button type="button" class="btn" style="padding: 8px 15px;" onclick="closeRejectModal()">취소</button>
+                    <button type="submit" class="btn-danger" style="padding: 8px 15px;">거절 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script>
+        // 모달 열기
+        function openRejectModal(resId, applicantName) {
+            document.getElementById('rejectModal').style.display = 'block';
+            document.getElementById('rejectTargetName').innerText = applicantName;
+            // 해당 예약 ID로 form action 동적 변경
+            document.getElementById('rejectForm').action = '/admin/reject/' + resId;
+            
+            // 모달 초기화
+            document.getElementById('presetReason').value = '해당 일시 시설 수용 인원 초과';
+            document.getElementById('customInputDiv').style.display = 'none';
+            document.getElementById('actualReason').value = '';
+        }
+
+        // 모달 닫기
+        function closeRejectModal() {
+            document.getElementById('rejectModal').style.display = 'none';
+        }
+
+        // '직접 입력' 선택 시 input 창 표시
+        function toggleCustomInput() {
+            var preset = document.getElementById('presetReason').value;
+            var customDiv = document.getElementById('customInputDiv');
+            var actualInput = document.getElementById('actualReason');
+            
+            if (preset === 'custom') {
+                customDiv.style.display = 'block';
+                actualInput.value = '';
+                actualInput.focus();
+                actualInput.required = true;
+            } else {
+                customDiv.style.display = 'none';
+                actualInput.required = false;
+            }
+        }
+
+        // 폼 전송 전 직접 입력이 아닐 경우 preset 값을 실제 사유로 세팅
+        document.getElementById('rejectForm').onsubmit = function() {
+            var preset = document.getElementById('presetReason').value;
+            var actualInput = document.getElementById('actualReason');
+            if (preset !== 'custom') {
+                actualInput.value = preset;
+            }
+            return true; // 폼 정상 제출
+        };
+
         document.addEventListener('DOMContentLoaded', function() {
             var calendarEl = document.getElementById('calendar');
             var calendar = new FullCalendar.Calendar(calendarEl, {
@@ -145,20 +224,14 @@
                     center: 'title',
                     right: 'dayGridMonth,timeGridWeek' 
                 },
-                
-                // 디스플레이 핵심 설정 (이전의 강제 속성 삭제)
                 allDaySlot: false,           
                 slotMinTime: '09:00:00',     
                 slotMaxTime: '18:00:00',     
-                
                 slotDuration: '01:00:00',    
                 slotLabelInterval: '01:00:00', 
-                
                 contentHeight: 'auto',       
                 nowIndicator: true,          
-                
                 events: '/admin/api/events', 
-
                 eventClick: function(info) {
                     info.jsEvent.preventDefault();
                     if (info.event.url) {
