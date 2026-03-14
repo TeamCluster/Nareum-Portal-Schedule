@@ -6,7 +6,7 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src='https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js'></script>
     <style>
-        .admin-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 30px; }
+        .manage-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 30px; }
         .badge-pending { background-color: #ffc107; color: #000; padding: 3px 8px; border-radius: 4px; font-size: 12px; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
@@ -76,10 +76,11 @@
 </head>
 <body style="max-width: 1200px; margin: 0 auto; padding: 20px; background-color: #f8f9fa;">
     <div class="header-top" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h1>admin</h1>
+        <h1>manage</h1>
         <div>
-            <a href="{{ url_for('admin_add') }}" class="btn btn-primary" style="margin-right: 10px; padding: 10px 15px; font-weight: bold;">+ 새 예약 수동 추가</a>
-            <a href="{{ url_for('index') }}" class="btn" style="padding: 10px 15px;">메인 화면</a>
+            <a href="{{ url_for('manage_add') }}" class="btn btn-primary" style="margin-right: 10px; padding: 10px 15px; font-weight: bold;">+ 새 예약 수동 추가</a>
+            <a href="{{ url_for('index') }}" class="btn" style="padding: 10px 15px; margin-right: 10px;">메인 화면</a>
+            <a href="{{ url_for('manage_logout') }}" class="btn-danger" style="padding: 10px 15px; background-color: #d9534f; color: white;">로그아웃</a>
         </div>
     </div>
 
@@ -93,7 +94,7 @@
       {% endif %}
     {% endwith %}
 
-    <div class="admin-section">
+    <div class="manage-section">
         <h2>승인 대기 중인 예약 ({{ pending_reservations|length }}건)</h2>
         {% if pending_reservations %}
         <table>
@@ -110,13 +111,12 @@
                 <tr>
                     <td><strong>{{ res.facility.name }}</strong></td>
                     <td>{{ res.start_time.strftime('%Y-%m-%d') }}<br>{{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</td>
-                    <td><a href="{{ url_for('admin_edit', res_id=res.id) }}" style="font-weight: bold; color: #007bff;">{{ res.applicant_name }}</a><br><small>{{ res.applicant_contact }}</small></td>
+                    <td><a href="{{ url_for('manage_edit', res_id=res.id) }}" style="font-weight: bold; color: #007bff;">{{ res.applicant_name }}</a><br><small>{{ res.applicant_contact }}</small></td>
                     <td>
                         <div class="action-btns">
-                            <form method="post" action="{{ url_for('admin_approve', res_id=res.id) }}">
+                            <form method="post" action="{{ url_for('manage_approve', res_id=res.id) }}">
                                 <button type="submit" class="btn-primary" style="padding: 5px 10px; font-size: 13px;">승인</button>
                             </form>
-                            <!-- [수정] 자바스크립트 모달 호출 버튼 -->
                             <button type="button" class="btn-danger" style="padding: 5px 10px; font-size: 13px;" 
                                 onclick="openRejectModal({{ res.id }}, '{{ res.applicant_name }}')">거절</button>
                         </div>
@@ -130,13 +130,13 @@
         {% endif %}
     </div>
 
-    <div class="admin-section">
+    <div class="manage-section">
         <h2>전체 대관 일정표 (캘린더 뷰)</h2>
         <p style="color: #666; margin-bottom: 15px;">※ 일정을 클릭하면 상세 조회 및 수정 화면으로 이동합니다.</p>
         <div id="calendar"></div>
     </div>
 
-    <!-- [추가] 예약 거절 모달 창 -->
+    <!-- 예약 거절 모달 창 -->
     <div id="rejectModal" class="modal">
         <div class="modal-content">
             <span class="close-btn" onclick="closeRejectModal()">&times;</span>
@@ -169,25 +169,20 @@
     </div>
 
     <script>
-        // 모달 열기
         function openRejectModal(resId, applicantName) {
             document.getElementById('rejectModal').style.display = 'block';
             document.getElementById('rejectTargetName').innerText = applicantName;
-            // 해당 예약 ID로 form action 동적 변경
-            document.getElementById('rejectForm').action = '/admin/reject/' + resId;
+            document.getElementById('rejectForm').action = '/manage/reject/' + resId;
             
-            // 모달 초기화
             document.getElementById('presetReason').value = '해당 일시 시설 수용 인원 초과';
             document.getElementById('customInputDiv').style.display = 'none';
             document.getElementById('actualReason').value = '';
         }
 
-        // 모달 닫기
         function closeRejectModal() {
             document.getElementById('rejectModal').style.display = 'none';
         }
 
-        // '직접 입력' 선택 시 input 창 표시
         function toggleCustomInput() {
             var preset = document.getElementById('presetReason').value;
             var customDiv = document.getElementById('customInputDiv');
@@ -204,14 +199,13 @@
             }
         }
 
-        // 폼 전송 전 직접 입력이 아닐 경우 preset 값을 실제 사유로 세팅
         document.getElementById('rejectForm').onsubmit = function() {
             var preset = document.getElementById('presetReason').value;
             var actualInput = document.getElementById('actualReason');
             if (preset !== 'custom') {
                 actualInput.value = preset;
             }
-            return true; // 폼 정상 제출
+            return true; 
         };
 
         document.addEventListener('DOMContentLoaded', function() {
@@ -231,7 +225,7 @@
                 slotLabelInterval: '01:00:00', 
                 contentHeight: 'auto',       
                 nowIndicator: true,          
-                events: '/admin/api/events', 
+                events: '/manage/api/events', 
                 eventClick: function(info) {
                     info.jsEvent.preventDefault();
                     if (info.event.url) {

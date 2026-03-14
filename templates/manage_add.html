@@ -8,7 +8,7 @@
 <body>
     <div class="header-top">
         <h1>예약 수동 추가 (관리자용)</h1>
-        <a href="{{ url_for('admin') }}" class="btn">뒤로 가기</a>
+        <a href="{{ url_for('manage') }}" class="btn">뒤로 가기</a>
     </div>
 
     {% with messages = get_flashed_messages() %}
@@ -80,13 +80,12 @@
             const dateInput = document.getElementById('dateInput');
             const checkboxes = document.querySelectorAll('.time-checkbox');
 
-            // 1. 예약 현황 불러와서 마감 처리하는 기존 함수
             function updateTimeSlots() {
                 const facilityId = facilitySelect.value;
                 const dateVal = dateInput.value;
 
                 if (facilityId && dateVal) {
-                    fetch(`/admin/api/booked_times?facility_id=${facilityId}&date=${dateVal}`)
+                    fetch(`/manage/api/booked_times?facility_id=${facilityId}&date=${dateVal}`)
                         .then(response => response.json())
                         .then(bookedHours => {
                             checkboxes.forEach(chk => {
@@ -125,12 +124,8 @@
             facilitySelect.addEventListener('change', updateTimeSlots);
             dateInput.addEventListener('change', updateTimeSlots);
 
-            // ========================================================
-            // 2. [신규 추가] 중간 시간 자동 선택 및 마감 시간 포함 여부 검증
-            // ========================================================
             checkboxes.forEach(chk => {
                 chk.addEventListener('change', function() {
-                    // 현재 체크되어 있는 체크박스들의 값을 모조리 가져옴
                     let checkedVals = [];
                     document.querySelectorAll('.time-checkbox:checked').forEach(c => checkedVals.push(parseInt(c.value)));
 
@@ -138,7 +133,6 @@
                         let minVal = Math.min(...checkedVals);
                         let maxVal = Math.max(...checkedVals);
 
-                        // 내가 선택한 시작과 끝 사이에 '마감(disabled)'된 시간이 끼어있는지 검사
                         let hasDisabled = false;
                         for (let i = minVal; i <= maxVal; i++) {
                             let box = document.querySelector(`.time-checkbox[value="${i}"]`);
@@ -148,14 +142,12 @@
                             }
                         }
 
-                        // 마감된 시간이 끼어있다면 방금 한 클릭을 강제 취소시키고 경고!
                         if (hasDisabled) {
                             alert("선택하신 시간대 사이에 이미 마감된 예약이 끼어있습니다. 연속된 빈 시간만 선택 가능합니다.");
                             this.checked = false; 
                             return;
                         }
 
-                        // 이상이 없다면, min과 max 사이의 모든 빈 체크박스를 체크 상태로 시각적 동기화
                         for (let i = minVal; i <= maxVal; i++) {
                             let box = document.querySelector(`.time-checkbox[value="${i}"]`);
                             if (box && !box.checked) {
