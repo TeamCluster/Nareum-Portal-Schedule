@@ -10,7 +10,7 @@
     <div class="header-top">
         <h1>{{ SERVICE_NAME }}</h1>
         <div>
-            <a href="{{ url_for('admin') }}" class="btn" style="background-color:#333; color:white;">관리자 페이지</a>
+            <!-- [수정] 관리자 페이지로 가는 버튼 제거 (도메인으로 직접 접근해야 함) -->
             <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
         </div>
     </div>
