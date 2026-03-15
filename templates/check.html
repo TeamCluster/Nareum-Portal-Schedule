@@ -46,27 +46,44 @@
 
         <div class="reservation-list">
             {% for res in reservations %}
-            <div class="reservation-item">
+            <div class="reservation-item" style="{% if res.is_deleted %}opacity: 0.6;{% endif %}">
                 <div class="reservation-info">
                     <p><strong>시설명:</strong> {{ res.facility.name }} ({{ res.facility.type }})</p>
                     <p><strong>이용 날짜:</strong> {{ res.start_time.strftime('%Y-%m-%d') }}</p>
                     <p><strong>이용 시간:</strong> {{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}</p>
                     <p><strong>상태:</strong> 
-                        {% if res.status == 'pending' %}
-                            <span style="color: #ff9800; font-weight: bold;">승인 대기 중</span> (관리자 확인 후 확정됩니다)
-                        {% elif res.status == 'confirmed' %}
-                            <span style="color: #4CAF50; font-weight: bold;">예약 확정</span>
+                        <!-- [수정] is_deleted와 거절 사유에 따른 상태 렌더링 분기 -->
+                        {% if not res.is_deleted %}
+                            {% if res.status == 'pending' %}
+                                <span style="color: #ff9800; font-weight: bold;">승인 대기 중</span> (관리자 확인 후 확정됩니다)
+                            {% elif res.status == 'confirmed' %}
+                                <span style="color: #4CAF50; font-weight: bold;">예약 확정</span>
+                            {% endif %}
+                        {% else %}
+                            {% if res.status == 'rejected' %}
+                                <span style="color: #d9534f; font-weight: bold;">승인 거절됨</span>
+                                <div style="margin-top: 5px; padding: 8px; background-color: #fdf2f2; border-left: 4px solid #d9534f; font-size: 14px; color: #333;">
+                                    <strong>거절 사유:</strong> {{ res.reject_reason if res.reject_reason else '사유 미기재 (관리자에게 문의해주세요)' }}
+                                </div>
+                            {% elif res.status == 'cancelled' %}
+                                <span style="color: #6c757d; font-weight: bold;">예약 취소됨 (사용자 취소)</span>
+                            {% else %}
+                                <span style="color: #6c757d; font-weight: bold;">시스템에 의해 취소됨</span>
+                            {% endif %}
                         {% endif %}
                     </p>
                 </div>
                 <div>
+                    <!-- [수정] 이미 취소되거나 삭제 처리된 건은 취소 버튼 숨김 처리 -->
+                    {% if not res.is_deleted and res.status in ['pending', 'confirmed'] %}
                     <form method="post" action="{{ url_for('cancel', res_id=res.id) }}" onsubmit="return confirm('이 예약을 정말 취소하시겠습니까? 취소 후에는 복구할 수 없습니다.');">
                         <button type="submit" class="btn-danger">예약 취소</button>
                     </form>
+                    {% endif %}
                 </div>
             </div>
             {% else %}
-                <p>현재 확정된 예약 내역이 없습니다.</p>
+                <p>현재 조회된 예약 내역이 없습니다.</p>
             {% endfor %}
         </div>
     {% endif %}

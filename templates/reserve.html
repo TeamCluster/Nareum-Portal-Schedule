@@ -20,7 +20,7 @@
       {% endif %}
     {% endwith %}
 
-    <form method="post">
+    <form method="post" id="reservationForm">
         <hr>
         <h2>1. 신청인 정보</h2>
         이름: <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required><br>
@@ -90,5 +90,28 @@
     </form>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // 폼 제출 시 0명 예약 방지 검증 로직
+            const form = document.getElementById('reservationForm');
+            if (form) {
+                form.addEventListener('submit', function(e) {
+                    const elem = parseInt(document.querySelector('input[name="elementary"]').value) || 0;
+                    const mid = parseInt(document.querySelector('input[name="middle"]').value) || 0;
+                    const high = parseInt(document.querySelector('input[name="high"]').value) || 0;
+                    const teen = parseInt(document.querySelector('input[name="teen"]').value) || 0;
+                    const adult = parseInt(document.querySelector('input[name="adult"]').value) || 0;
+                    
+                    const totalParticipants = elem + mid + high + teen + adult;
+                    
+                    if (totalParticipants === 0) {
+                        e.preventDefault(); // 폼 제출을 완전히 막음
+                        alert("이용 인원은 총합 최소 1명 이상이어야 합니다. 인원수를 입력해주세요.");
+                    }
+                });
+            }
+        });
+    </script>
 </body>
 </html>

@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>관리자 로그인</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .login-container {
+            max-width: 400px;
+            margin: 100px auto;
+            padding: 30px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 1px solid #ddd;
+        }
+        .login-container h2 {
+            text-align: center;
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: #555;}
+        .form-group input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
+        .btn-login { width: 100%; padding: 12px; font-size: 16px; background-color: #333; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; margin-top: 10px;}
+        .btn-login:hover { background-color: #555; }
+    </style>
+</head>
+<body style="background-color: #f8f9fa;">
+    <div class="login-container">
+        <h2>관리자 로그인</h2>
+        
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <div style="background: #fdf2f2; border-left: 4px solid #d9534f; color: #d9534f; padding: 10px; margin-bottom: 15px; border-radius: 4px; font-size: 14px; font-weight: bold;">
+            {% for message in messages %}
+              <p style="margin: 0;">{{ message }}</p>
+            {% endfor %}
+            </div>
+          {% endif %}
+        {% endwith %}
+
+        <form method="post" action="{{ url_for('manage_login') }}">
+            <div class="form-group">
+                <label>관리자 비밀번호</label>
+                <input type="password" name="password" required autofocus placeholder="비밀번호를 입력하세요">
+            </div>
+            <button type="submit" class="btn-login">접속하기</button>
+        </form>
+        
+        <div style="text-align: center; margin-top: 20px;">
+            <a href="{{ url_for('index') }}" style="color: #007bff; text-decoration: none; font-size: 14px;">메인 페이지로 돌아가기</a>
+        </div>
+    </div>
+</body>
+</html>

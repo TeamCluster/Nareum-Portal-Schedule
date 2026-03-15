@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>예약 상세 조회 및 수정 (관리자)</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        .edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .edit-section { background: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px;}
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #333; }
+        .form-group input, .form-group select { width: 100%; padding: 8px; box-sizing: border-box; }
+        .participant-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    </style>
+</head>
+<body style="max-width: 800px; margin: 0 auto; padding: 20px;">
+    <div class="header-top" style="display: flex; justify-content: space-between;">
+        <h1>예약 상세 정보 및 수정</h1>
+        <a href="{{ url_for('manage') }}" class="btn">대시보드로 돌아가기</a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <ul class="flash-messages" style="color: blue; font-weight: bold;">
+        {% for message in messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <div class="facility-card" style="margin-bottom: 20px;">
+        <h3>{{ res.facility.name }} ({{ res.facility.type }})</h3>
+        <p style="font-size: 1.2em; color: #d9534f; font-weight: bold;">
+            이용 시간: {{ res.start_time.strftime('%Y년 %m월 %d일 %H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}
+        </p>
+    </div>
+        
+    <form method="post">
+        <div class="edit-grid">
+            <div class="edit-section">
+                <h4>1. 신청인 정보</h4>
+                <div class="form-group">
+                    <label>이름</label>
+                    <input type="text" name="name" value="{{ res.applicant_name }}" required>
+                </div>
+                <div class="form-group">
+                    <label>연락처</label>
+                    <input type="text" name="contact" value="{{ res.applicant_contact }}" required>
+                </div>
+                <div class="form-group">
+                    <label>소속</label>
+                    <input type="text" name="school" value="{{ res.applicant_school }}" required>
+                </div>
+                <div class="form-group">
+                    <label>동아리명</label>
+                    <input type="text" name="club" value="{{ res.applicant_club if res.applicant_club else '' }}">
+                </div>
+            </div>
+
+            <div class="edit-section">
+                <h4>2. 이용 인원 및 필요 물품</h4>
+                <div class="form-group">
+                    <label>이용 인원 상세</label>
+                    <div class="participant-grid">
+                        <div>초등 <input type="number" name="elementary" value="{{ participants.get('elementary', 0) }}" min="0" style="width:100%"></div>
+                        <div>중등 <input type="number" name="middle" value="{{ participants.get('middle', 0) }}" min="0" style="width:100%"></div>
+                        <div>고등 <input type="number" name="high" value="{{ participants.get('high', 0) }}" min="0" style="width:100%"></div>
+                        <div>후기 <input type="number" name="teen" value="{{ participants.get('teen', 0) }}" min="0" style="width:100%"></div>
+                        <div>성인 <input type="number" name="adult" value="{{ participants.get('adult', 0) }}" min="0" style="width:100%"></div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>필요 물품 (체크박스)</label>
+                    {% set all_equipments = ['앰프', '스피커', '마이크', '키보드'] %}
+                    {% for item in all_equipments %}
+                        <label style="display:inline-block; font-weight:normal; margin-right:10px;">
+                            <input type="checkbox" name="equipment" value="{{ item }}" style="width:auto;"
+                            {% if item in equipments_list %}checked{% endif %}>
+                            {{ item }}
+                        </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="edit-section" style="background-color: #e8f4f8;">
+            <h4>3. 관리자 제어 (상태 변경)</h4>
+            <div class="form-group">
+                <label>현재 예약 상태</label>
+                <select name="status" id="statusSelect" onchange="toggleReasonInput()" style="padding: 10px; font-size: 16px; border: 2px solid #007bff; border-radius: 4px;">
+                    <option value="pending" {% if res.status == 'pending' %}selected{% endif %}>🟡 승인 대기 (Pending)</option>
+                    <option value="confirmed" {% if res.status == 'confirmed' %}selected{% endif %}>🟢 예약 확정 (Confirmed)</option>
+                    <option value="cancelled" {% if res.status == 'cancelled' %}selected{% endif %}>⚪ 예약 취소 (Cancelled - Soft Delete)</option>
+                    <option value="rejected" {% if res.status == 'rejected' %}selected{% endif %}>🔴 승인 거절 (Rejected - Soft Delete)</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="reasonGroup" style="display: {% if res.status == 'rejected' %}block{% else %}none{% endif %}; margin-top: 15px;">
+                <label>거절 사유 (신청자에게 표시됩니다)</label>
+                
+                <select id="presetReasonSelect" onchange="updateCustomReasonInput()" style="margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;">
+                    <option value="">-- 자주 쓰는 사유 선택 --</option>
+                    <option value="해당 일시 시설 수용 인원 초과">해당 일시 시설 수용 인원 초과</option>
+                    <option value="타 활동 및 행사로 인한 중복">타 활동 및 행사로 인한 예약 중복</option>
+                    <option value="시설 수리 및 점검">시설 수리 및 점검</option>
+                    <option value="신청 양식 미비 및 조건 미달">신청 양식 미비 및 대관 조건 미달</option>
+                    <option value="custom">직접 입력...</option>
+                </select>
+                
+                <input type="text" id="actualRejectReason" name="reject_reason" value="{{ res.reject_reason if res.reject_reason else '' }}" placeholder="직접 사유를 입력하세요">
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 20px;">
+            <button type="submit" class="btn-primary" style="font-size: 18px; padding: 10px 30px;">저장 / 수정 완료</button>
+        </div>
+    </form>
+
+    <script>
+        function toggleReasonInput() {
+            var statusSelect = document.getElementById('statusSelect');
+            var reasonGroup = document.getElementById('reasonGroup');
+            
+            if (statusSelect.value === 'rejected') {
+                reasonGroup.style.display = 'block';
+            } else {
+                reasonGroup.style.display = 'none';
+            }
+        }
+
+        function updateCustomReasonInput() {
+            var preset = document.getElementById('presetReasonSelect').value;
+            var actual = document.getElementById('actualRejectReason');
+            
+            if (preset === 'custom' || preset === '') {
+                actual.value = '';
+                actual.focus();
+            } else {
+                actual.value = preset;
+            }
+        }
+    </script>
+</body>
+</html>
