@@ -10,7 +10,6 @@
     <div class="header-top">
         <h1>{{ SERVICE_NAME }}</h1>
         <div>
-            <!-- [수정] 관리자 페이지로 가는 버튼 제거 (도메인으로 직접 접근해야 함) -->
             <a href="{{ url_for('check') }}" class="btn btn-primary">예약 내역 확인하기</a>
         </div>
     </div>
@@ -23,6 +22,7 @@
             <label>날짜 선택: 
                 <input type="date" name="date" id="dateInput" 
                        value="{{ selected_date if selected_date else '' }}" 
+                       min="{{ min_date }}" max="{{ max_date }}"
                        required
                        onchange="document.getElementById('searchForm').submit();">
             </label>
@@ -44,7 +44,7 @@
     {% endwith %}
 
     {% if not selected_date %}
-        <p style="color: #007bff;">위에서 날짜를 선택해주세요.</p>
+        <p style="color: #007bff;">위에서 날짜를 선택해주세요. 예약은 3일 후부터 2주 뒤까지만 가능합니다.</p>
     {% else %}
         <p><strong>선택된 날짜:</strong> {{ selected_date }}</p>
     {% endif %}
@@ -71,7 +71,7 @@
                     {% if not selected_date %}
                         <button type="button" disabled>날짜를 선택해주세요</button>
                     {% elif not is_reservable %}
-                         <button type="submit" disabled>예약 불가 (과거/오늘)</button>
+                         <button type="submit" disabled>예약 불가 기간</button>
                     {% elif is_sold_out %}
                         <button type="submit" disabled>예약 마감</button>
                     {% else %}

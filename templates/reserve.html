@@ -35,7 +35,7 @@
 
         <hr>
         <h2>2. 이용 일정 선택 (시간 선택)</h2>
-        <p>이용할 시간대를 모두 선택해주세요 (연속 선택 필수)</p>
+        <p>이용할 시간대를 모두 선택해주세요 (연속된 시간으로 최대 2시간 선택 가능)</p>
         <div class="time-grid">
             {% for h in range(9, 18) %}
                 {% if h in booked_hours %}
@@ -76,7 +76,8 @@
         <hr>
         <h2>5. 공지 및 준수사항</h2>
         <ul>
-            <li>대관 시간은 최소 하루 전까지 신청해야 합니다.</li>
+            <li>대관 신청은 최소 3일 전부터 가능하며 당일 대관은 불가합니다.</li>
+            <li>이름/연락처당 하루 1회(최대 2시간) 및 일주일에 2회까지만 예약할 수 있습니다.</li>
             <li>음식물 반입을 금지합니다.</li>
             <li>사용 후 정리정돈은 필수입니다.</li>
         </ul>
@@ -93,7 +94,29 @@
     
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // 폼 제출 시 0명 예약 방지 검증 로직
+            const timeCheckboxes = document.querySelectorAll('input[name="time_slot"]');
+            timeCheckboxes.forEach(chk => {
+                chk.addEventListener('change', function() {
+                    const checkedBoxes = Array.from(timeCheckboxes).filter(c => c.checked);
+                    
+                    if (checkedBoxes.length > 2) {
+                        alert("예약은 하루 최대 2시간(2칸)까지만 가능합니다.");
+                        this.checked = false;
+                        return;
+                    }
+                    
+                    if (checkedBoxes.length === 2) {
+                        const val1 = parseInt(checkedBoxes[0].value);
+                        const val2 = parseInt(checkedBoxes[1].value);
+                        if (Math.abs(val1 - val2) !== 1) {
+                            alert("이용 시간은 연속된 시간으로만 선택 가능합니다.");
+                            this.checked = false;
+                            return;
+                        }
+                    }
+                });
+            });
+
             const form = document.getElementById('reservationForm');
             if (form) {
                 form.addEventListener('submit', function(e) {
@@ -106,7 +129,7 @@
                     const totalParticipants = elem + mid + high + teen + adult;
                     
                     if (totalParticipants === 0) {
-                        e.preventDefault(); // 폼 제출을 완전히 막음
+                        e.preventDefault(); 
                         alert("이용 인원은 총합 최소 1명 이상이어야 합니다. 인원수를 입력해주세요.");
                     }
                 });

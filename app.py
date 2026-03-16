@@ -36,13 +36,21 @@ def index():
     availability_data = {}
     is_reservable = True
 
+    today = datetime.today().date()
+    # 최소 3일 전, 최대 14일 후
+    min_date_obj = today + timedelta(days=3)
+    max_date_obj = today + timedelta(days=14)
+    
+    min_date = min_date_obj.strftime("%Y-%m-%d")
+    max_date = max_date_obj.strftime("%Y-%m-%d")
+
     if selected_date_str:
         try:
             target_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
-            today = datetime.today().date()
 
-            if target_date <= today:
-                flash("예약 신청은 내일 날짜부터 가능합니다. (현재는 현황 조회만 가능합니다)")
+            # 예약 가능 일자 제약 검사
+            if target_date < min_date_obj or target_date > max_date_obj:
+                flash(f"예약은 {min_date} 부터 {max_date} 까지만 가능합니다.")
                 is_reservable = False
 
             start_of_day = datetime.combine(target_date, datetime.min.time())
@@ -78,7 +86,9 @@ def index():
         facilities=facilities,
         selected_date=selected_date_str,
         availability_data=availability_data,
-        is_reservable=is_reservable
+        is_reservable=is_reservable,
+        min_date=min_date,
+        max_date=max_date
     )
 
 @app.route('/reserve/<int:facility_id>', methods=["GET", "POST"])
@@ -107,8 +117,8 @@ def reserve(facility_id):
             booked_hours.append(h)
     
     if request.method == "POST":
-        name = request.form.get("name")
-        contact = request.form.get("contact")
+        name = request.form.get("name", "").strip()
+        contact = request.form.get("contact", "").strip()
         school = request.form.get("school")
         club = request.form.get("club")
         selected_hours = request.form.getlist("time_slot")
@@ -122,8 +132,53 @@ def reserve(facility_id):
         }
         equipment_list = request.form.getlist("equipment")
         
+        if not selected_hours:
+            flash("이용 시간을 하나 이상 선택해주세요.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        # 1. 1회 최대 2시간 제한 및 연속된 시간 확인
+        if len(selected_hours) > 2:
+            flash("예약은 하루에 최대 2시간까지만 가능합니다.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
         start_hour = sorted([int(h) for h in selected_hours])[0]
         end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+        
+        if end_hour - start_hour != len(selected_hours):
+            flash("이용 시간은 연속된 시간으로만 선택 가능합니다.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        # 2. 1일 1회 예약 제한 (해당 날짜에 이미 예약이 있는지 검사)
+        same_day_res = Reservation.query.filter(
+            Reservation.applicant_name == name,
+            Reservation.applicant_contact == contact,
+            Reservation.start_time >= datetime.combine(selected_date_obj, datetime.min.time()),
+            Reservation.start_time < datetime.combine(selected_date_obj + timedelta(days=1), datetime.min.time()),
+            Reservation.is_deleted == False,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).first()
+
+        if same_day_res:
+            flash("같은 이름과 연락처로 해당 날짜에 이미 예약된 내역이 있습니다. (하루 1회만 예약 가능)")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        # 3. 1주일 2회 예약 제한 (선택한 날짜가 속한 주 - 월~일 기준)
+        start_of_week = selected_date_obj - timedelta(days=selected_date_obj.weekday())
+        end_of_week = start_of_week + timedelta(days=7)
+
+        weekly_res_count = Reservation.query.filter(
+            Reservation.applicant_name == name,
+            Reservation.applicant_contact == contact,
+            Reservation.start_time >= datetime.combine(start_of_week, datetime.min.time()),
+            Reservation.start_time < datetime.combine(end_of_week, datetime.min.time()),
+            Reservation.is_deleted == False,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).count()
+
+        if weekly_res_count >= 2:
+            flash("해당 주간(월~일)에 이미 2회의 예약이 존재합니다. 일주일에 최대 2회까지만 예약하실 수 있습니다.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
         start_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
         end_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
 
@@ -193,7 +248,7 @@ def cancel(res_id):
     return redirect(url_for('check'))
 
 # ==========================================
-# 관리자 (Manage) 라우트 - 모든 url, 함수명 변경
+# 관리자 (Manage) 라우트
 # ==========================================
 
 @app.route('/manage/login', methods=['GET', 'POST'])
@@ -333,16 +388,22 @@ def manage_edit(res_id):
 def manage_add():
     facilities = Facility.query.all()
     if request.method == 'POST':
-        facility_id = request.form.get("facility_id")
-        date_str = request.form.get("date")
+        form_data = request.form
+        facility_id = form_data.get("facility_id")
+        date_str = form_data.get("date")
         
-        selected_hours = request.form.getlist("time_slot")
+        selected_hours = form_data.getlist("time_slot")
         if not selected_hours:
             flash("이용 시간을 하나 이상 선택해주세요.")
-            return redirect(request.url)
+            return render_template('manage_add.html', facilities=facilities, form_data=form_data)
             
         start_hour = sorted([int(h) for h in selected_hours])[0]
         end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+        
+        # 관리자 예약 시에도 "연속된 시간" 강제 검증 로직 추가
+        if end_hour - start_hour != len(selected_hours):
+            flash("이용 시간은 연속된 시간으로만 선택 가능합니다. 띄엄띄엄 선택하실 수 없습니다.")
+            return render_template('manage_add.html', facilities=facilities, form_data=form_data)
         
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         start_dt = datetime.combine(target_date, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
@@ -358,26 +419,24 @@ def manage_add():
 
         if overlap:
             flash("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
-            return redirect(request.url)
+            return render_template('manage_add.html', facilities=facilities, form_data=form_data)
 
+        # 관리자는 0명 예약 허용 (조건 체크 제거 유지)
         participants = {
-            "elementary": int(request.form.get("elementary", 0)),
-            "middle": int(request.form.get("middle", 0)),
-            "high": int(request.form.get("high", 0)),
-            "teen": int(request.form.get("teen", 0)),
-            "adult": int(request.form.get("adult", 0))
+            "elementary": int(form_data.get("elementary", 0)),
+            "middle": int(form_data.get("middle", 0)),
+            "high": int(form_data.get("high", 0)),
+            "teen": int(form_data.get("teen", 0)),
+            "adult": int(form_data.get("adult", 0))
         }
-        if sum(participants.values()) == 0:
-            flash("이용 인원은 최소 1명 이상이어야 합니다.")
-            return redirect(request.url)
-        equipment_list = request.form.getlist("equipment")
+        equipment_list = form_data.getlist("equipment")
 
         new_res = Reservation(
             facility_id=facility_id,
-            applicant_name=request.form.get("name"),
-            applicant_contact=request.form.get("contact"),
-            applicant_school=request.form.get("school"),
-            applicant_club=request.form.get("club"),
+            applicant_name=form_data.get("name"),
+            applicant_contact=form_data.get("contact"),
+            applicant_school=form_data.get("school"),
+            applicant_club=form_data.get("club"),
             start_time=start_dt,
             end_time=end_dt,
             participant_info=participants, 
