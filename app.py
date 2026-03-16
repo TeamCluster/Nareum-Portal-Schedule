@@ -296,6 +296,7 @@ def manage_api_events():
 def api_booked_times():
     facility_id = request.args.get('facility_id', type=int)
     date_str = request.args.get('date')
+    exclude_res_id = request.args.get('exclude_res_id', type=int)
     
     if not facility_id or not date_str:
         return jsonify([])
@@ -308,13 +309,19 @@ def api_booked_times():
     start_of_day = datetime.combine(target_date, datetime.min.time())
     end_of_day = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
 
-    reservations = Reservation.query.filter(
+    query = Reservation.query.filter(
         Reservation.facility_id == facility_id,
         Reservation.start_time >= start_of_day,
         Reservation.start_time < end_of_day,
         Reservation.is_deleted == False,
         Reservation.status.in_(["confirmed", "pending"])
-    ).all()
+    )
+
+    # 수정 페이지인 경우 자신의 예약 시간은 제외
+    if exclude_res_id:
+        query = query.filter(Reservation.id != exclude_res_id)
+
+    reservations = query.all()
 
     booked = []
     for res in reservations:
@@ -347,8 +354,55 @@ def manage_reject(res_id):
 @app.route('/manage/edit/<int:res_id>', methods=['GET', 'POST'])
 def manage_edit(res_id):
     res = Reservation.query.get_or_404(res_id)
+    facilities = Facility.query.all()
     
     if request.method == 'POST':
+        # ==== 1. 시설, 날짜, 시간 수정 검증 ====
+        facility_id = request.form.get('facility_id')
+        date_str = request.form.get('date')
+        selected_hours = request.form.getlist('time_slot')
+
+        if not selected_hours:
+            flash("이용 시간을 하나 이상 선택해주세요.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        start_hour = sorted([int(h) for h in selected_hours])[0]
+        end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+
+        if end_hour - start_hour != len(selected_hours):
+            flash("이용 시간은 연속된 시간으로만 선택 가능합니다. 띄엄띄엄 선택하실 수 없습니다.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            flash("날짜 형식이 올바르지 않습니다.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        start_dt = datetime.combine(target_date, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
+        end_dt = datetime.combine(target_date, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
+
+        # 다른 예약과 시간이 겹치는지 체크 (자신의 예약은 제외)
+        overlap = Reservation.query.filter(
+            Reservation.facility_id == facility_id,
+            Reservation.id != res.id,
+            Reservation.start_time < end_dt, 
+            Reservation.end_time > start_dt,
+            Reservation.is_deleted == False,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).first()
+
+        if overlap:
+            flash("선택하신 시설/시간에 이미 등록된 다른 예약이 있어 변경할 수 없습니다.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        # 예약 시간 저장
+        res.facility_id = facility_id
+        res.start_time = start_dt
+        res.end_time = end_dt
+        # ==========================================
+
+        # ==== 2. 신청인 및 상세 정보 수정 ====
         res.applicant_name = request.form.get('name')
         res.applicant_contact = request.form.get('contact')
         res.applicant_school = request.form.get('school')
@@ -381,8 +435,11 @@ def manage_edit(res_id):
         
     participants = res.participant_info if res.participant_info else {}
     equipments_list = res.requested_equipment if res.requested_equipment else []
+    
+    # 렌더링용 기존 시간 배열 준비
+    current_hours = [str(h) for h in range(res.start_time.hour, res.end_time.hour)]
 
-    return render_template('manage_edit.html', res=res, participants=participants, equipments_list=equipments_list)
+    return render_template('manage_edit.html', res=res, facilities=facilities, participants=participants, equipments_list=equipments_list, current_hours=current_hours)
 
 @app.route('/manage/add', methods=['GET', 'POST'])
 def manage_add():
@@ -400,7 +457,6 @@ def manage_add():
         start_hour = sorted([int(h) for h in selected_hours])[0]
         end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
         
-        # 관리자 예약 시에도 "연속된 시간" 강제 검증 로직 추가
         if end_hour - start_hour != len(selected_hours):
             flash("이용 시간은 연속된 시간으로만 선택 가능합니다. 띄엄띄엄 선택하실 수 없습니다.")
             return render_template('manage_add.html', facilities=facilities, form_data=form_data)
