@@ -2,83 +2,116 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>관리자 임의 예약 추가</title>
+    <title>예약 수동 추가 (관리자용)</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        body { margin: 0; padding: 0; background-color: #f8f9fa; font-family: sans-serif; }
+        .admin-layout { display: flex; min-height: 100vh; }
+        .admin-sidebar { width: 220px; background-color: #343a40; color: white; display: flex; flex-direction: column; }
+        .admin-sidebar .brand { padding: 20px; font-size: 20px; font-weight: bold; text-align: center; border-bottom: 1px solid #4b545c; }
+        .admin-nav { display: flex; flex-direction: column; padding-top: 20px; }
+        .admin-nav a { color: #c2c7d0; text-decoration: none; padding: 15px 20px; border-bottom: 1px solid #4b545c; transition: 0.2s; }
+        .admin-nav a:hover, .admin-nav a.active { background-color: #494e53; color: white; border-left: 4px solid #007bff; }
+        
+        .admin-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .admin-header { background-color: white; padding: 15px 30px; border-bottom: 1px solid #dee2e6; display: flex; justify-content: space-between; align-items: center; }
+        .admin-content { padding: 30px; overflow-y: auto; flex: 1; }
+        .form-wrapper { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; border: 1px solid #ddd; }
+    </style>
 </head>
 <body>
-    <div class="header-top">
-        <h1>예약 수동 추가 (관리자용)</h1>
-        <a href="{{ url_for('manage') }}" class="btn">뒤로 가기</a>
-    </div>
-
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul class="flash-messages">
-        {% for message in messages %}
-          <li>{{ message }}</li>
-        {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
-
-    <form method="post" class="facility-card">
-        <h2>1. 시설 및 날짜 선택</h2>
-        <label>시설 선택:
-            <select name="facility_id" id="facilitySelect" required>
-                <option value="">-- 시설을 선택하세요 --</option>
-                {% for f in facilities %}
-                    <!-- 기존 작성된 값 유지 -->
-                    <option value="{{ f.id }}" {% if form_data and form_data.facility_id == f.id|string %}selected{% endif %}>
-                        {{ f.name }} ({{ f.type }})
-                    </option>
-                {% endfor %}
-            </select>
-        </label><br><br>
-        <!-- 기존 날짜 값 유지 -->
-        <label>예약 날짜: <input type="date" name="date" id="dateInput" value="{{ form_data.date if form_data else '' }}" required></label><br><br>
-
-        <hr>
-        <h2>2. 신청인 정보</h2>
-        <!-- 입력 데이터 유지 -->
-        이름: <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required><br>
-        연락처: <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" required placeholder="010-0000-0000"><br>
-        소속: <input type="text" name="school" value="{{ form_data.school if form_data else '' }}" required><br>
-        동아리: <input type="text" name="club" value="{{ form_data.club if form_data else '' }}"><br>
-
-        <hr>
-        <h2>3. 이용 일정 선택 (시간 선택)</h2>
-        <p>※ 시설과 날짜를 선택해야 시간표가 열립니다. (연속된 시간만 선택 가능)</p>
-        <div class="time-grid" id="timeGrid">
-            {% for h in range(9, 18) %}
-                <label class="time-slot disabled" id="label-{{ h }}" style="pointer-events: none;">
-                    <input type="checkbox" name="time_slot" value="{{ h }}" class="time-checkbox" disabled>
-                    <span>{{ h }}:00</span><span class="status-msg"><br>(대기)</span>
-                </label>
-            {% endfor %}
+    <div class="admin-layout">
+        <!-- Sidebar -->
+        <div class="admin-sidebar">
+            <div class="brand">관리자 메뉴</div>
+            <div class="admin-nav">
+                <a href="{{ url_for('manage') }}">메인</a>
+                <a href="{{ url_for('manage_add') }}" class="active">예약 추가</a>
+                <a href="{{ url_for('manage_requests') }}">승인 요청</a>
+                <a href="{{ url_for('manage_list') }}">목록형 보기</a>
+            </div>
         </div>
 
-        <hr>
-        <h2>4. 이용 인원 (관리자: 0명 가능)</h2>
-        초등: <input type="number" name="elementary" value="{{ form_data.elementary if form_data else '0' }}" min="0"><br>
-        중등: <input type="number" name="middle" value="{{ form_data.middle if form_data else '0' }}" min="0"><br>
-        고등: <input type="number" name="high" value="{{ form_data.high if form_data else '0' }}" min="0"><br>
-        후기청소년: <input type="number" name="teen" value="{{ form_data.teen if form_data else '0' }}" min="0"><br>
-        성인: <input type="number" name="adult" value="{{ form_data.adult if form_data else '0' }}" min="0"><br>
+        <div class="admin-main">
+            <div class="admin-header">
+                <h2 style="margin: 0; color: #333;">예약 수동 추가</h2>
+                <div>
+                    <a href="{{ url_for('index') }}" class="btn" target="_blank" style="margin-right: 10px;">일반 유저 화면</a>
+                    <a href="{{ url_for('manage_logout') }}" class="btn-danger">로그아웃</a>
+                </div>
+            </div>
 
-        <hr>
-        <h2>5. 필요 물품</h2>
-        {% set equipments = ['앰프', '스피커', '마이크', '키보드'] %}
-        {% for item in equipments %}
-            <label style="margin-right: 15px;">
-                <input type="checkbox" name="equipment" value="{{ item }}"
-                {% if form_data and item in form_data.getlist('equipment') %}checked{% endif %}>
-                {{ item }}
-            </label>
-        {% endfor %}
-        <br><br><br>
+            <div class="admin-content">
+                {% with messages = get_flashed_messages() %}
+                  {% if messages %}
+                    <ul class="flash-messages">
+                    {% for message in messages %}
+                      <li>{{ message }}</li>
+                    {% endfor %}
+                    </ul>
+                  {% endif %}
+                {% endwith %}
 
-        <button type="submit" class="btn-primary" style="width: 100%; padding: 15px; font-size: 18px;">즉시 예약 확정하기</button>
-    </form>
+                <div class="form-wrapper">
+                    <form method="post">
+                        <h2>1. 시설 및 날짜 선택</h2>
+                        <label>시설 선택:
+                            <select name="facility_id" id="facilitySelect" required>
+                                <option value="">-- 시설을 선택하세요 --</option>
+                                {% for f in facilities %}
+                                    <option value="{{ f.id }}" {% if form_data and form_data.facility_id == f.id|string %}selected{% endif %}>
+                                        {{ f.name }} ({{ f.type }})
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </label><br><br>
+                        <label>예약 날짜: <input type="date" name="date" id="dateInput" value="{{ form_data.date if form_data else '' }}" required></label><br><br>
+
+                        <hr>
+                        <h2>2. 신청인 정보</h2>
+                        이름: <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required><br>
+                        연락처: <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" required placeholder="010-0000-0000"><br>
+                        소속: <input type="text" name="school" value="{{ form_data.school if form_data else '' }}" required><br>
+                        동아리: <input type="text" name="club" value="{{ form_data.club if form_data else '' }}"><br>
+
+                        <hr>
+                        <h2>3. 이용 일정 선택 (시간 선택)</h2>
+                        <p>※ 시설과 날짜를 선택해야 시간표가 열립니다. (연속된 시간만 선택 가능)</p>
+                        <div class="time-grid" id="timeGrid">
+                            {% for h in range(9, 18) %}
+                                <label class="time-slot disabled" id="label-{{ h }}" style="pointer-events: none;">
+                                    <input type="checkbox" name="time_slot" value="{{ h }}" class="time-checkbox" disabled>
+                                    <span>{{ h }}:00</span><span class="status-msg"><br>(대기)</span>
+                                </label>
+                            {% endfor %}
+                        </div>
+
+                        <hr>
+                        <h2>4. 이용 인원 (관리자: 0명 가능)</h2>
+                        초등: <input type="number" name="elementary" value="{{ form_data.elementary if form_data else '0' }}" min="0"><br>
+                        중등: <input type="number" name="middle" value="{{ form_data.middle if form_data else '0' }}" min="0"><br>
+                        고등: <input type="number" name="high" value="{{ form_data.high if form_data else '0' }}" min="0"><br>
+                        후기청소년: <input type="number" name="teen" value="{{ form_data.teen if form_data else '0' }}" min="0"><br>
+                        성인: <input type="number" name="adult" value="{{ form_data.adult if form_data else '0' }}" min="0"><br>
+
+                        <hr>
+                        <h2>5. 필요 물품</h2>
+                        {% set equipments = ['앰프', '스피커', '마이크', '키보드'] %}
+                        {% for item in equipments %}
+                            <label style="margin-right: 15px;">
+                                <input type="checkbox" name="equipment" value="{{ item }}"
+                                {% if form_data and item in form_data.getlist('equipment') %}checked{% endif %}>
+                                {{ item }}
+                            </label>
+                        {% endfor %}
+                        <br><br><br>
+
+                        <button type="submit" class="btn-primary" style="width: 100%; padding: 15px; font-size: 18px;">즉시 예약 확정하기</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {

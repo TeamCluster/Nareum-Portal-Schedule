@@ -2,144 +2,179 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>예약 상세 조회 및 수정 (관리자)</title>
+    <title>예약 상세 정보 및 수정</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
+        body { margin: 0; padding: 0; background-color: #f8f9fa; font-family: sans-serif; }
+        .admin-layout { display: flex; min-height: 100vh; }
+        .admin-sidebar { width: 220px; background-color: #343a40; color: white; display: flex; flex-direction: column; }
+        .admin-sidebar .brand { padding: 20px; font-size: 20px; font-weight: bold; text-align: center; border-bottom: 1px solid #4b545c; }
+        .admin-nav { display: flex; flex-direction: column; padding-top: 20px; }
+        .admin-nav a { color: #c2c7d0; text-decoration: none; padding: 15px 20px; border-bottom: 1px solid #4b545c; transition: 0.2s; }
+        .admin-nav a:hover, .admin-nav a.active { background-color: #494e53; color: white; border-left: 4px solid #007bff; }
+        
+        .admin-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .admin-header { background-color: white; padding: 15px 30px; border-bottom: 1px solid #dee2e6; display: flex; justify-content: space-between; align-items: center; }
+        .admin-content { padding: 30px; overflow-y: auto; flex: 1; }
+        
+        .form-wrapper { max-width: 800px; margin: 0 auto; }
         .edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .edit-section { background: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px;}
+        .edit-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px;}
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #333; }
         .form-group input, .form-group select { width: 100%; padding: 8px; box-sizing: border-box; }
         .participant-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     </style>
 </head>
-<body style="max-width: 800px; margin: 0 auto; padding: 20px;">
-    <div class="header-top" style="display: flex; justify-content: space-between;">
-        <h1>예약 상세 정보 및 수정</h1>
-        <a href="{{ url_for('manage') }}" class="btn">대시보드로 돌아가기</a>
-    </div>
+<body>
+    <div class="admin-layout">
+        <!-- Sidebar -->
+        <div class="admin-sidebar">
+            <div class="brand">관리자 메뉴</div>
+            <div class="admin-nav">
+                <a href="{{ url_for('manage') }}">메인</a>
+                <a href="{{ url_for('manage_add') }}">예약 추가</a>
+                <a href="{{ url_for('manage_requests') }}">승인 요청</a>
+                <a href="{{ url_for('manage_list') }}">목록형 보기</a>
+            </div>
+        </div>
 
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul class="flash-messages" style="color: blue; font-weight: bold;">
-        {% for message in messages %}
-          <li>{{ message }}</li>
-        {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
-        
-    <form method="post">
-        <div class="edit-section" style="margin-bottom: 20px;">
-            <h4>0. 시설 및 일정 수정</h4>
-            <div class="edit-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 15px;">
-                <div class="form-group">
-                    <label>시설 선택</label>
-                    <select name="facility_id" id="facilitySelect" required>
-                        {% for f in facilities %}
-                            <option value="{{ f.id }}" {% if f.id == res.facility_id %}selected{% endif %}>{{ f.name }} ({{ f.type }})</option>
+        <div class="admin-main">
+            <div class="admin-header">
+                <h2 style="margin: 0; color: #333;">예약 상세 조회 및 수정</h2>
+                <div>
+                    <a href="javascript:history.back()" class="btn" style="margin-right: 10px;">뒤로 가기</a>
+                    <a href="{{ url_for('manage_logout') }}" class="btn-danger">로그아웃</a>
+                </div>
+            </div>
+
+            <div class="admin-content">
+                <div class="form-wrapper">
+                    {% with messages = get_flashed_messages() %}
+                      {% if messages %}
+                        <ul class="flash-messages" style="color: blue; font-weight: bold;">
+                        {% for message in messages %}
+                          <li>{{ message }}</li>
                         {% endfor %}
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>예약 날짜</label>
-                    <input type="date" name="date" id="dateInput" value="{{ res.start_time.strftime('%Y-%m-%d') }}" required>
-                </div>
-            </div>
-            
-            <div class="form-group">
-                <label>이용 시간 선택 (연속된 시간만 선택 가능)</label>
-                <div class="time-grid" id="timeGrid">
-                    {% for h in range(9, 18) %}
-                        <label class="time-slot disabled" id="label-{{ h }}" style="pointer-events: none;">
-                            <input type="checkbox" name="time_slot" value="{{ h }}" class="time-checkbox" disabled>
-                            <span>{{ h }}:00</span><span class="status-msg"><br>(대기)</span>
-                        </label>
-                    {% endfor %}
+                        </ul>
+                      {% endif %}
+                    {% endwith %}
+                        
+                    <form method="post">
+                        <div class="edit-section" style="margin-bottom: 20px;">
+                            <h4>0. 시설 및 일정 수정</h4>
+                            <div class="edit-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 15px;">
+                                <div class="form-group">
+                                    <label>시설 선택</label>
+                                    <select name="facility_id" id="facilitySelect" required>
+                                        {% for f in facilities %}
+                                            <option value="{{ f.id }}" {% if f.id == res.facility_id %}selected{% endif %}>{{ f.name }} ({{ f.type }})</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>예약 날짜</label>
+                                    <input type="date" name="date" id="dateInput" value="{{ res.start_time.strftime('%Y-%m-%d') }}" required>
+                                </div>
+                            </div>
+                            
+                            <div class="form-group">
+                                <label>이용 시간 선택 (연속된 시간만 선택 가능)</label>
+                                <div class="time-grid" id="timeGrid">
+                                    {% for h in range(9, 18) %}
+                                        <label class="time-slot disabled" id="label-{{ h }}" style="pointer-events: none;">
+                                            <input type="checkbox" name="time_slot" value="{{ h }}" class="time-checkbox" disabled>
+                                            <span>{{ h }}:00</span><span class="status-msg"><br>(대기)</span>
+                                        </label>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="edit-grid">
+                            <div class="edit-section">
+                                <h4>1. 신청인 정보</h4>
+                                <div class="form-group">
+                                    <label>이름</label>
+                                    <input type="text" name="name" value="{{ res.applicant_name }}" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>연락처</label>
+                                    <input type="text" name="contact" value="{{ res.applicant_contact }}" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>소속</label>
+                                    <input type="text" name="school" value="{{ res.applicant_school }}" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>동아리명</label>
+                                    <input type="text" name="club" value="{{ res.applicant_club if res.applicant_club else '' }}">
+                                </div>
+                            </div>
+
+                            <div class="edit-section">
+                                <h4>2. 이용 인원 및 필요 물품</h4>
+                                <div class="form-group">
+                                    <label>이용 인원 상세</label>
+                                    <div class="participant-grid">
+                                        <div>초등 <input type="number" name="elementary" value="{{ participants.get('elementary', 0) }}" min="0" style="width:100%"></div>
+                                        <div>중등 <input type="number" name="middle" value="{{ participants.get('middle', 0) }}" min="0" style="width:100%"></div>
+                                        <div>고등 <input type="number" name="high" value="{{ participants.get('high', 0) }}" min="0" style="width:100%"></div>
+                                        <div>후기 <input type="number" name="teen" value="{{ participants.get('teen', 0) }}" min="0" style="width:100%"></div>
+                                        <div>성인 <input type="number" name="adult" value="{{ participants.get('adult', 0) }}" min="0" style="width:100%"></div>
+                                    </div>
+                                </div>
+
+                                <div class="form-group" style="margin-top: 20px;">
+                                    <label>필요 물품 (체크박스)</label>
+                                    {% set all_equipments = ['앰프', '스피커', '마이크', '키보드'] %}
+                                    {% for item in all_equipments %}
+                                        <label style="display:inline-block; font-weight:normal; margin-right:10px;">
+                                            <input type="checkbox" name="equipment" value="{{ item }}" style="width:auto;"
+                                            {% if item in equipments_list %}checked{% endif %}>
+                                            {{ item }}
+                                        </label>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="edit-section" style="background-color: #e8f4f8;">
+                            <h4>3. 관리자 제어 (상태 변경)</h4>
+                            <div class="form-group">
+                                <label>현재 예약 상태</label>
+                                <select name="status" id="statusSelect" onchange="toggleReasonInput()" style="padding: 10px; font-size: 16px; border: 2px solid #007bff; border-radius: 4px;">
+                                    <option value="pending" {% if res.status == 'pending' %}selected{% endif %}>🟡 승인 대기 (Pending)</option>
+                                    <option value="confirmed" {% if res.status == 'confirmed' %}selected{% endif %}>🟢 예약 확정 (Confirmed)</option>
+                                    <option value="cancelled" {% if res.status == 'cancelled' %}selected{% endif %}>⚪ 예약 취소 (Cancelled - Soft Delete)</option>
+                                    <option value="rejected" {% if res.status == 'rejected' %}selected{% endif %}>🔴 승인 거절 (Rejected - Soft Delete)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group" id="reasonGroup" style="display: {% if res.status == 'rejected' %}block{% else %}none{% endif %}; margin-top: 15px;">
+                                <label>거절 사유 (신청자에게 표시됩니다)</label>
+                                
+                                <select id="presetReasonSelect" onchange="updateCustomReasonInput()" style="margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;">
+                                    <option value="">-- 자주 쓰는 사유 선택 --</option>
+                                    <option value="해당 일시 시설 수용 인원 초과">해당 일시 시설 수용 인원 초과</option>
+                                    <option value="타 활동 및 행사로 인한 중복">타 활동 및 행사로 인한 예약 중복</option>
+                                    <option value="시설 수리 및 점검">시설 수리 및 점검</option>
+                                    <option value="신청 양식 미비 및 조건 미달">신청 양식 미비 및 대관 조건 미달</option>
+                                    <option value="custom">직접 입력...</option>
+                                </select>
+                                
+                                <input type="text" id="actualRejectReason" name="reject_reason" value="{{ res.reject_reason if res.reject_reason else '' }}" placeholder="직접 사유를 입력하세요">
+                            </div>
+                        </div>
+
+                        <div style="text-align: center; margin-top: 20px;">
+                            <button type="submit" class="btn-primary" style="font-size: 18px; padding: 10px 30px;">저장 / 수정 완료</button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>
-
-        <div class="edit-grid">
-            <div class="edit-section">
-                <h4>1. 신청인 정보</h4>
-                <div class="form-group">
-                    <label>이름</label>
-                    <input type="text" name="name" value="{{ res.applicant_name }}" required>
-                </div>
-                <div class="form-group">
-                    <label>연락처</label>
-                    <input type="text" name="contact" value="{{ res.applicant_contact }}" required>
-                </div>
-                <div class="form-group">
-                    <label>소속</label>
-                    <input type="text" name="school" value="{{ res.applicant_school }}" required>
-                </div>
-                <div class="form-group">
-                    <label>동아리명</label>
-                    <input type="text" name="club" value="{{ res.applicant_club if res.applicant_club else '' }}">
-                </div>
-            </div>
-
-            <div class="edit-section">
-                <h4>2. 이용 인원 및 필요 물품</h4>
-                <div class="form-group">
-                    <label>이용 인원 상세</label>
-                    <div class="participant-grid">
-                        <div>초등 <input type="number" name="elementary" value="{{ participants.get('elementary', 0) }}" min="0" style="width:100%"></div>
-                        <div>중등 <input type="number" name="middle" value="{{ participants.get('middle', 0) }}" min="0" style="width:100%"></div>
-                        <div>고등 <input type="number" name="high" value="{{ participants.get('high', 0) }}" min="0" style="width:100%"></div>
-                        <div>후기 <input type="number" name="teen" value="{{ participants.get('teen', 0) }}" min="0" style="width:100%"></div>
-                        <div>성인 <input type="number" name="adult" value="{{ participants.get('adult', 0) }}" min="0" style="width:100%"></div>
-                    </div>
-                </div>
-
-                <div class="form-group" style="margin-top: 20px;">
-                    <label>필요 물품 (체크박스)</label>
-                    {% set all_equipments = ['앰프', '스피커', '마이크', '키보드'] %}
-                    {% for item in all_equipments %}
-                        <label style="display:inline-block; font-weight:normal; margin-right:10px;">
-                            <input type="checkbox" name="equipment" value="{{ item }}" style="width:auto;"
-                            {% if item in equipments_list %}checked{% endif %}>
-                            {{ item }}
-                        </label>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-
-        <div class="edit-section" style="background-color: #e8f4f8;">
-            <h4>3. 관리자 제어 (상태 변경)</h4>
-            <div class="form-group">
-                <label>현재 예약 상태</label>
-                <select name="status" id="statusSelect" onchange="toggleReasonInput()" style="padding: 10px; font-size: 16px; border: 2px solid #007bff; border-radius: 4px;">
-                    <option value="pending" {% if res.status == 'pending' %}selected{% endif %}>🟡 승인 대기 (Pending)</option>
-                    <option value="confirmed" {% if res.status == 'confirmed' %}selected{% endif %}>🟢 예약 확정 (Confirmed)</option>
-                    <option value="cancelled" {% if res.status == 'cancelled' %}selected{% endif %}>⚪ 예약 취소 (Cancelled - Soft Delete)</option>
-                    <option value="rejected" {% if res.status == 'rejected' %}selected{% endif %}>🔴 승인 거절 (Rejected - Soft Delete)</option>
-                </select>
-            </div>
-
-            <div class="form-group" id="reasonGroup" style="display: {% if res.status == 'rejected' %}block{% else %}none{% endif %}; margin-top: 15px;">
-                <label>거절 사유 (신청자에게 표시됩니다)</label>
-                
-                <select id="presetReasonSelect" onchange="updateCustomReasonInput()" style="margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px;">
-                    <option value="">-- 자주 쓰는 사유 선택 --</option>
-                    <option value="해당 일시 시설 수용 인원 초과">해당 일시 시설 수용 인원 초과</option>
-                    <option value="타 활동 및 행사로 인한 중복">타 활동 및 행사로 인한 예약 중복</option>
-                    <option value="시설 수리 및 점검">시설 수리 및 점검</option>
-                    <option value="신청 양식 미비 및 조건 미달">신청 양식 미비 및 대관 조건 미달</option>
-                    <option value="custom">직접 입력...</option>
-                </select>
-                
-                <input type="text" id="actualRejectReason" name="reject_reason" value="{{ res.reject_reason if res.reject_reason else '' }}" placeholder="직접 사유를 입력하세요">
-            </div>
-        </div>
-
-        <div style="text-align: center; margin-top: 20px;">
-            <button type="submit" class="btn-primary" style="font-size: 18px; padding: 10px 30px;">저장 / 수정 완료</button>
-        </div>
-    </form>
+    </div>
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
@@ -179,7 +214,6 @@
                                     label.style.pointerEvents = 'auto';
                                     statusMsg.innerHTML = '';
                                     
-                                    // 초기 로드 시 원래 예약되어있던 시간을 자동 체크
                                     if (isFirstLoad && facilityId === originalFacilityId && dateVal === originalDate) {
                                         if (originalHours.includes(hour.toString())) {
                                             chk.checked = true;
@@ -196,10 +230,8 @@
             facilitySelect.addEventListener('change', updateTimeSlots);
             dateInput.addEventListener('change', updateTimeSlots);
 
-            // 페이지 렌더링 시 시간표 조회
             updateTimeSlots();
             
-            // 관리자 예약 수정 시 연속 선택을 강제하는 로직
             checkboxes.forEach(chk => {
                 chk.addEventListener('change', function() {
                     let checkedVals = [];
@@ -224,7 +256,6 @@
                             return;
                         }
 
-                        // 연속 강제 선택 
                         for (let i = minVal; i <= maxVal; i++) {
                             let box = document.querySelector(`.time-checkbox[value="${i}"]`);
                             if (box && !box.checked) {
@@ -236,7 +267,6 @@
             });
         });
 
-        // 상태값별 사유 입력창 보이기/숨기기
         function toggleReasonInput() {
             var statusSelect = document.getElementById('statusSelect');
             var reasonGroup = document.getElementById('reasonGroup');
