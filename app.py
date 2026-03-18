@@ -36,13 +36,19 @@ def index():
     availability_data = {}
     is_reservable = True
 
+    today = datetime.today().date()
+    min_date_obj = today + timedelta(days=3)
+    max_date_obj = today + timedelta(days=14)
+    
+    min_date = min_date_obj.strftime("%Y-%m-%d")
+    max_date = max_date_obj.strftime("%Y-%m-%d")
+
     if selected_date_str:
         try:
             target_date = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
-            today = datetime.today().date()
 
-            if target_date <= today:
-                flash("예약 신청은 내일 날짜부터 가능합니다. (현재는 현황 조회만 가능합니다)")
+            if target_date < min_date_obj or target_date > max_date_obj:
+                flash(f"예약은 {min_date} 부터 {max_date} 까지만 가능합니다.")
                 is_reservable = False
 
             start_of_day = datetime.combine(target_date, datetime.min.time())
@@ -78,7 +84,9 @@ def index():
         facilities=facilities,
         selected_date=selected_date_str,
         availability_data=availability_data,
-        is_reservable=is_reservable
+        is_reservable=is_reservable,
+        min_date=min_date,
+        max_date=max_date
     )
 
 @app.route('/reserve/<int:facility_id>', methods=["GET", "POST"])
@@ -107,8 +115,8 @@ def reserve(facility_id):
             booked_hours.append(h)
     
     if request.method == "POST":
-        name = request.form.get("name")
-        contact = request.form.get("contact")
+        name = request.form.get("name", "").strip()
+        contact = request.form.get("contact", "").strip()
         school = request.form.get("school")
         club = request.form.get("club")
         selected_hours = request.form.getlist("time_slot")
@@ -122,8 +130,50 @@ def reserve(facility_id):
         }
         equipment_list = request.form.getlist("equipment")
         
+        if not selected_hours:
+            flash("이용 시간을 하나 이상 선택해주세요.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        if len(selected_hours) > 2:
+            flash("예약은 하루에 최대 2시간까지만 가능합니다.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
         start_hour = sorted([int(h) for h in selected_hours])[0]
         end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+        
+        if end_hour - start_hour != len(selected_hours):
+            flash("이용 시간은 연속된 시간으로만 선택 가능합니다.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        same_day_res = Reservation.query.filter(
+            Reservation.applicant_name == name,
+            Reservation.applicant_contact == contact,
+            Reservation.start_time >= datetime.combine(selected_date_obj, datetime.min.time()),
+            Reservation.start_time < datetime.combine(selected_date_obj + timedelta(days=1), datetime.min.time()),
+            Reservation.is_deleted == False,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).first()
+
+        if same_day_res:
+            flash("같은 이름과 연락처로 해당 날짜에 이미 예약된 내역이 있습니다. (하루 1회만 예약 가능)")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
+        start_of_week = selected_date_obj - timedelta(days=selected_date_obj.weekday())
+        end_of_week = start_of_week + timedelta(days=7)
+
+        weekly_res_count = Reservation.query.filter(
+            Reservation.applicant_name == name,
+            Reservation.applicant_contact == contact,
+            Reservation.start_time >= datetime.combine(start_of_week, datetime.min.time()),
+            Reservation.start_time < datetime.combine(end_of_week, datetime.min.time()),
+            Reservation.is_deleted == False,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).count()
+
+        if weekly_res_count >= 2:
+            flash("해당 주간(월~일)에 이미 2회의 예약이 존재합니다. 일주일에 최대 2회까지만 예약하실 수 있습니다.")
+            return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data=request.form)
+
         start_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
         end_dt = datetime.combine(selected_date_obj, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
 
@@ -193,7 +243,7 @@ def cancel(res_id):
     return redirect(url_for('check'))
 
 # ==========================================
-# 관리자 (Manage) 라우트 - 모든 url, 함수명 변경
+# 관리자 (Manage) 라우트 - 개편됨
 # ==========================================
 
 @app.route('/manage/login', methods=['GET', 'POST'])
@@ -218,8 +268,39 @@ def manage_logout():
 
 @app.route('/manage')
 def manage():
+    # 1. 승인 대기 목록 (요약용 3개만)
+    pending_query = Reservation.query.filter_by(status='pending', is_deleted=False).order_by(Reservation.start_time)
+    pending_count = pending_query.count()
+    pending_preview = pending_query.limit(3).all()
+
+    # 2. 오늘의 예약 현황
+    today = datetime.today().date()
+    start_of_today = datetime.combine(today, datetime.min.time())
+    end_of_today = start_of_today + timedelta(days=1)
+    
+    todays_reservations = Reservation.query.filter(
+        Reservation.start_time >= start_of_today,
+        Reservation.start_time < end_of_today,
+        Reservation.is_deleted == False,
+        Reservation.status.in_(['confirmed', 'pending'])
+    ).order_by(Reservation.start_time).all()
+
+    return render_template('manage.html', 
+                           pending_count=pending_count, 
+                           pending_preview=pending_preview,
+                           todays_reservations=todays_reservations)
+
+@app.route('/manage/requests')
+def manage_requests():
+    # 승인 대기 전체 목록
     pending_reservations = Reservation.query.filter_by(status='pending', is_deleted=False).order_by(Reservation.start_time).all()
-    return render_template('manage.html', pending_reservations=pending_reservations)
+    return render_template('manage_requests.html', pending_reservations=pending_reservations)
+
+@app.route('/manage/list')
+def manage_list():
+    # 모든 예약 내역 리스트 형태 (삭제/거절 포함 전체 내역 확인용)
+    reservations = Reservation.query.order_by(Reservation.start_time.desc()).all()
+    return render_template('manage_list.html', reservations=reservations)
 
 @app.route('/manage/api/events')
 def manage_api_events():
@@ -241,6 +322,7 @@ def manage_api_events():
 def api_booked_times():
     facility_id = request.args.get('facility_id', type=int)
     date_str = request.args.get('date')
+    exclude_res_id = request.args.get('exclude_res_id', type=int)
     
     if not facility_id or not date_str:
         return jsonify([])
@@ -253,13 +335,18 @@ def api_booked_times():
     start_of_day = datetime.combine(target_date, datetime.min.time())
     end_of_day = datetime.combine(target_date + timedelta(days=1), datetime.min.time())
 
-    reservations = Reservation.query.filter(
+    query = Reservation.query.filter(
         Reservation.facility_id == facility_id,
         Reservation.start_time >= start_of_day,
         Reservation.start_time < end_of_day,
         Reservation.is_deleted == False,
         Reservation.status.in_(["confirmed", "pending"])
-    ).all()
+    )
+
+    if exclude_res_id:
+        query = query.filter(Reservation.id != exclude_res_id)
+
+    reservations = query.all()
 
     booked = []
     for res in reservations:
@@ -274,7 +361,7 @@ def manage_approve(res_id):
     res.status = 'confirmed'
     db.session.commit()
     flash(f"{res.applicant_name}님의 예약이 승인되었습니다.")
-    return redirect(request.referrer or url_for('manage'))
+    return redirect(request.referrer or url_for('manage_requests'))
 
 @app.route('/manage/reject/<int:res_id>', methods=['POST'])
 def manage_reject(res_id):
@@ -287,13 +374,55 @@ def manage_reject(res_id):
     db.session.commit()
     
     flash(f"{res.applicant_name}님의 예약이 거절(취소) 처리되었습니다.")
-    return redirect(request.referrer or url_for('manage'))
+    return redirect(request.referrer or url_for('manage_requests'))
 
 @app.route('/manage/edit/<int:res_id>', methods=['GET', 'POST'])
 def manage_edit(res_id):
     res = Reservation.query.get_or_404(res_id)
+    facilities = Facility.query.all()
     
     if request.method == 'POST':
+        facility_id = request.form.get('facility_id')
+        date_str = request.form.get('date')
+        selected_hours = request.form.getlist('time_slot')
+
+        if not selected_hours:
+            flash("이용 시간을 하나 이상 선택해주세요.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        start_hour = sorted([int(h) for h in selected_hours])[0]
+        end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+
+        if end_hour - start_hour != len(selected_hours):
+            flash("이용 시간은 연속된 시간으로만 선택 가능합니다. 띄엄띄엄 선택하실 수 없습니다.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        try:
+            target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            flash("날짜 형식이 올바르지 않습니다.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        start_dt = datetime.combine(target_date, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
+        end_dt = datetime.combine(target_date, datetime.strptime(f"{end_hour:02d}:00", "%H:%M").time())
+
+        overlap = Reservation.query.filter(
+            Reservation.facility_id == facility_id,
+            Reservation.id != res.id,
+            Reservation.start_time < end_dt, 
+            Reservation.end_time > start_dt,
+            Reservation.is_deleted == False,
+            Reservation.status.in_(["confirmed", "pending"])
+        ).first()
+
+        if overlap:
+            flash("선택하신 시설/시간에 이미 등록된 다른 예약이 있어 변경할 수 없습니다.")
+            return redirect(url_for('manage_edit', res_id=res.id))
+
+        res.facility_id = facility_id
+        res.start_time = start_dt
+        res.end_time = end_dt
+
         res.applicant_name = request.form.get('name')
         res.applicant_contact = request.form.get('contact')
         res.applicant_school = request.form.get('school')
@@ -326,23 +455,29 @@ def manage_edit(res_id):
         
     participants = res.participant_info if res.participant_info else {}
     equipments_list = res.requested_equipment if res.requested_equipment else []
+    current_hours = [str(h) for h in range(res.start_time.hour, res.end_time.hour)]
 
-    return render_template('manage_edit.html', res=res, participants=participants, equipments_list=equipments_list)
+    return render_template('manage_edit.html', res=res, facilities=facilities, participants=participants, equipments_list=equipments_list, current_hours=current_hours)
 
 @app.route('/manage/add', methods=['GET', 'POST'])
 def manage_add():
     facilities = Facility.query.all()
     if request.method == 'POST':
-        facility_id = request.form.get("facility_id")
-        date_str = request.form.get("date")
+        form_data = request.form
+        facility_id = form_data.get("facility_id")
+        date_str = form_data.get("date")
         
-        selected_hours = request.form.getlist("time_slot")
+        selected_hours = form_data.getlist("time_slot")
         if not selected_hours:
             flash("이용 시간을 하나 이상 선택해주세요.")
-            return redirect(request.url)
+            return render_template('manage_add.html', facilities=facilities, form_data=form_data)
             
         start_hour = sorted([int(h) for h in selected_hours])[0]
         end_hour = sorted([int(h) for h in selected_hours])[-1] + 1
+        
+        if end_hour - start_hour != len(selected_hours):
+            flash("이용 시간은 연속된 시간으로만 선택 가능합니다. 띄엄띄엄 선택하실 수 없습니다.")
+            return render_template('manage_add.html', facilities=facilities, form_data=form_data)
         
         target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
         start_dt = datetime.combine(target_date, datetime.strptime(f"{start_hour:02d}:00", "%H:%M").time())
@@ -358,26 +493,23 @@ def manage_add():
 
         if overlap:
             flash("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
-            return redirect(request.url)
+            return render_template('manage_add.html', facilities=facilities, form_data=form_data)
 
         participants = {
-            "elementary": int(request.form.get("elementary", 0)),
-            "middle": int(request.form.get("middle", 0)),
-            "high": int(request.form.get("high", 0)),
-            "teen": int(request.form.get("teen", 0)),
-            "adult": int(request.form.get("adult", 0))
+            "elementary": int(form_data.get("elementary", 0)),
+            "middle": int(form_data.get("middle", 0)),
+            "high": int(form_data.get("high", 0)),
+            "teen": int(form_data.get("teen", 0)),
+            "adult": int(form_data.get("adult", 0))
         }
-        if sum(participants.values()) == 0:
-            flash("이용 인원은 최소 1명 이상이어야 합니다.")
-            return redirect(request.url)
-        equipment_list = request.form.getlist("equipment")
+        equipment_list = form_data.getlist("equipment")
 
         new_res = Reservation(
             facility_id=facility_id,
-            applicant_name=request.form.get("name"),
-            applicant_contact=request.form.get("contact"),
-            applicant_school=request.form.get("school"),
-            applicant_club=request.form.get("club"),
+            applicant_name=form_data.get("name"),
+            applicant_contact=form_data.get("contact"),
+            applicant_school=form_data.get("school"),
+            applicant_club=form_data.get("club"),
             start_time=start_dt,
             end_time=end_dt,
             participant_info=participants, 
