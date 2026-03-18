@@ -1,4 +1,4 @@
-/* 기본 레이아웃 */
+/* 기본 레이아웃 (일반 유저 페이지용) */
 body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; }
 hr { margin: 20px 0; border: 0; border-top: 1px solid #ddd; }
 
@@ -36,3 +36,36 @@ input[type="date"], input[type="text"], input[type="number"] { padding: 8px; fon
 .reservation-item { border: 1px solid #ddd; padding: 15px; border-radius: 8px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;}
 .reservation-info p { margin: 5px 0; }
 .flash-messages { color: #dc3545; font-weight: bold; margin-bottom: 15px; list-style-type: none; padding-left: 0;}
+
+/* =========================================================================
+   관리자 페이지 (Admin) 공통 레이아웃 
+   (위의 800px 제한 속성을 리셋하고 화면을 100% 사용하도록 설정)
+========================================================================= */
+
+/* 1. 관리자용 Body 리셋 */
+body.admin-body { 
+    margin: 0; 
+    padding: 0; 
+    max-width: none; /* 너비 800px 제한 해제 */
+    background-color: #f8f9fa; 
+    font-family: sans-serif; 
+}
+
+/* 2. 레이아웃 구조 */
+.admin-layout { display: flex; min-height: 100vh; width: 100%; }
+.admin-sidebar { width: 220px; min-width: 220px; background-color: #343a40; color: white; display: flex; flex-direction: column; }
+.admin-sidebar .brand { padding: 20px; font-size: 20px; font-weight: bold; text-align: center; border-bottom: 1px solid #4b545c; }
+.admin-nav { display: flex; flex-direction: column; padding-top: 20px; }
+.admin-nav a { color: #c2c7d0; text-decoration: none; padding: 15px 20px; border-bottom: 1px solid #4b545c; transition: 0.2s; }
+.admin-nav a:hover, .admin-nav a.active { background-color: #494e53; color: white; border-left: 4px solid #007bff; }
+
+/* 3. 메인 콘텐츠 영역 (사이드바 제외 100%) */
+.admin-main { flex: 1; display: flex; flex-direction: column; overflow-x: hidden; width: calc(100% - 220px); }
+.admin-header { background-color: white; padding: 15px 30px; border-bottom: 1px solid #dee2e6; display: flex; justify-content: space-between; align-items: center; }
+.admin-content { padding: 30px; overflow-y: auto; flex: 1; }
+
+/* 4. 관리자 테이블 공통 영역 */
+.manage-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 30px; overflow-x: auto;}
+.manage-section table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; min-width: 800px; }
+.manage-section th, .manage-section td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+.manage-section th { background-color: #f4f4f4; }

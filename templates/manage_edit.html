@@ -5,28 +5,20 @@
     <title>예약 상세 정보 및 수정</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <style>
-        body { margin: 0; padding: 0; background-color: #f8f9fa; font-family: sans-serif; }
-        .admin-layout { display: flex; min-height: 100vh; }
-        .admin-sidebar { width: 220px; background-color: #343a40; color: white; display: flex; flex-direction: column; }
-        .admin-sidebar .brand { padding: 20px; font-size: 20px; font-weight: bold; text-align: center; border-bottom: 1px solid #4b545c; }
-        .admin-nav { display: flex; flex-direction: column; padding-top: 20px; }
-        .admin-nav a { color: #c2c7d0; text-decoration: none; padding: 15px 20px; border-bottom: 1px solid #4b545c; transition: 0.2s; }
-        .admin-nav a:hover, .admin-nav a.active { background-color: #494e53; color: white; border-left: 4px solid #007bff; }
-        
-        .admin-main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-        .admin-header { background-color: white; padding: 15px 30px; border-bottom: 1px solid #dee2e6; display: flex; justify-content: space-between; align-items: center; }
-        .admin-content { padding: 30px; overflow-y: auto; flex: 1; }
-        
-        .form-wrapper { max-width: 800px; margin: 0 auto; }
+        .form-wrapper { max-width: 800px; margin: 0 auto; width: 100%; box-sizing: border-box; }
         .edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .edit-section { background: #fff; padding: 20px; border-radius: 8px; border: 1px solid #ddd; margin-bottom: 20px;}
         .form-group { margin-bottom: 15px; }
         .form-group label { display: block; font-weight: bold; margin-bottom: 5px; color: #333; }
         .form-group input, .form-group select { width: 100%; padding: 8px; box-sizing: border-box; }
         .participant-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+        
+        @media (max-width: 768px) {
+            .edit-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
-<body>
+<body class="admin-body">
     <div class="admin-layout">
         <!-- Sidebar -->
         <div class="admin-sidebar">
