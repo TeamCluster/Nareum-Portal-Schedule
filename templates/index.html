@@ -9,7 +9,7 @@
 
     <form id="searchForm" method="get" action="/" class="search-form">
         <input type="date" name="date" id="dateInput" value="{{ selected_date if selected_date else '' }}"
-            min="{{ min_date }}" max="{{ max_date }}" required
+            required
             onchange="document.getElementById('searchForm').submit();">
     </form>
 </section>
@@ -101,4 +101,8 @@
     </article>
     {% endfor %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/index.js') }}"></script>
 {% endblock %}
