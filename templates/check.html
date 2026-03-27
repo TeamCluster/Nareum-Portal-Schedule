@@ -3,116 +3,106 @@
 {% block title %}예약 내역 조회 - {{ SERVICE_NAME }}{% endblock %}
 
 {% block content %}
+<div class="check-container">
+    <div class="section-header" style="margin-bottom: 25px;">
+        <h2 style="margin-bottom: 5px;">예약 내역 조회</h2>
+        <p style="color: var(--text-sub); font-size: 0.95rem;">
+            신청 시 입력했던 이름과 연락처를 통해 예약 현황을 확인하실 수 있습니다.
+        </p>
+    </div>
 
-<section class="search-box">
-    <h3>내 예약 확인하기</h3>
-    <p>예약 시 입력한 이름과 연락처를 입력해주세요.</p>
+    {% with messages = get_flashed_messages() %}
+    {% if messages %}
+    <ul class="flash-messages">
+        {% for message in messages %}
+        <li>{{ message }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+    {% endwith %}
 
-    <form method="post" action="{{ url_for('check') }}" class="search-form"
-        style="flex-direction: column; gap: 10px; max-width: 400px; margin: 0 auto;">
-        <input type="text" name="name" required placeholder="신청자 이름"
-            style="width: 100%; padding: 12px; border-radius: 8px; border: none; font-size: 1rem;"
-            value="{{ search_name if search_name else '' }}">
-        <input type="text" name="contact" required placeholder="연락처 (010-0000-0000)" pattern="010-[0-9]{4}-[0-9]{4}"
-            style="width: 100%; padding: 12px; border-radius: 8px; border: none; font-size: 1rem;"
-            value="{{ search_contact if search_contact else '' }}">
-        <button type="submit" class="btn btn-primary btn-full"
-            style="background-color: #fff; color: var(--primary-color); margin-top: 10px;">
-            조회하기
-        </button>
-    </form>
-
-
-</section>
-
-{% with messages = get_flashed_messages() %}
-{% if messages %}
-<ul class="flash-messages">
-    {% for message in messages %}
-    <li>{{ message }}</li>
-    {% endfor %}
-</ul>
-{% endif %}
-{% endwith %}
-
-{% if reservations is not none %}
-<div style="margin-bottom: 20px; padding: 0 5px;">
-    <h2 style="font-size: 1.4rem; margin-bottom: 8px;">조회 결과</h2>
-    <p style="color: var(--text-sub); font-size: 0.95rem;">
-        <strong>{{ search_name }}</strong>님 ({{ search_contact }})의 대관 신청 내역입니다.
-    </p>
-</div>
-
-<div class="reservation-list" style="display: flex; flex-direction: column; gap: 16px;">
-    {% for res in reservations %}
     <div class="facility-card"
-        style="padding: 20px; {% if res.is_deleted %}background-color: #f1f5f9; border-color: #cbd5e0;{% endif %}">
-        <div
-            style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 15px;">
-            <div class="res-info">
-                <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px;">
-                    <span class="facility-type-badge" style="position: static; font-size: 0.7rem;">{{ res.facility.type
-                        }}</span>
-                    <h3 style="margin: 0; font-size: 1.15rem;">{{ res.facility.name }}</h3>
-                </div>
+        style="padding: 24px; border-radius: 16px; margin-bottom: 30px; max-width: 600px; margin-left: auto; margin-right: auto;">
+        <form method="post" action="{{ url_for('check') }}">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                <label>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">이름</span>
+                    <input type="text" name="name" value="{{ search_name if search_name else '' }}" required
+                        placeholder="신청자 이름">
+                </label>
+                <label>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">연락처</span>
+                    <input type="text" name="contact" value="{{ search_contact if search_contact else '' }}" required
+                        placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}">
+                </label>
+            </div>
+            <button type="submit" class="btn-primary" style="width: 100%;">조회하기</button>
+        </form>
+    </div>
 
-                <div
-                    style="color: var(--text-main); font-size: 0.95rem; display: flex; flex-direction: column; gap: 5px;">
-                    <p style="margin: 0;"><strong>이용 날짜:</strong> {{ res.start_time.strftime('%Y-%m-%d') }}</p>
-                    <p style="margin: 0;"><strong>이용 시간:</strong> {{ res.start_time.strftime('%H:%M') }} ~ {{
-                        res.end_time.strftime('%H:%M') }}</p>
-                </div>
+    {% if reservations is not none %}
+    <div class="section-header" style="margin-bottom: 20px; text-align: center;">
+        <h3>조회 결과 <small style="font-weight: 400; color: var(--text-sub); font-size: 0.9rem;">총 {{ reservations|length
+                }}건</small></h3>
+    </div>
 
-                <div style="margin-top: 12px; font-size: 0.9rem;">
-                    <strong>상태:</strong>
-                    {% if not res.is_deleted %}
-                    {% if res.status == 'pending' %}
-                    <span style="color: var(--warning); font-weight: bold;">승인 대기 중</span>
-                    <span style="color: var(--text-sub); font-size: 0.8rem; margin-left: 5px;">(관리자 확인 후 확정됩니다)</span>
-                    {% elif res.status == 'confirmed' %}
-                    <span style="color: var(--success); font-weight: bold;">예약 확정</span>
-                    {% endif %}
-                    {% else %}
-                    {% if res.status == 'rejected' %}
-                    <span style="color: var(--danger); font-weight: bold;">승인 거절됨</span>
-                    <div
-                        style="margin-top: 8px; padding: 10px; background-color: #fff5f5; border-radius: 6px; border-left: 4px solid var(--danger); font-size: 0.85rem;">
-                        <strong>거절 사유:</strong> {{ res.reject_reason if res.reject_reason else '사유 미기재 (센터 문의)' }}
-                    </div>
-                    {% elif res.status == 'cancelled' %}
-                    <span style="color: #64748b; font-weight: bold;">사용자 취소</span>
-                    {% else %}
-                    <span style="color: #64748b; font-weight: bold;">시스템 취소</span>
-                    {% endif %}
-                    {% endif %}
+    <div class="res-grid">
+        {% for res in reservations %}
+        <div class="res-ticket">
+            <div class="res-header">
+                <h4 class="res-title">{{ res.facility.name }}</h4>
+                <span class="res-badge">{{ res.facility.type }}</span>
+            </div>
+
+            <div class="res-info-box">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+                        <line x1="16" y1="2" x2="16" y2="6" />
+                        <line x1="8" y1="2" x2="8" y2="6" />
+                        <line x1="3" y1="10" x2="21" y2="10" />
+                    </svg>
+                    <strong>{{ res.start_time.strftime('%Y-%m-%d') }}</strong>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    {{ res.start_time.strftime('%H:%M') }} ~ {{ res.end_time.strftime('%H:%M') }}
                 </div>
             </div>
 
-            <div class="res-action" style="flex-shrink: 0;">
-                {% if not res.is_deleted and res.status in ['pending', 'confirmed'] %}
-                <form method="post" action="{{ url_for('cancel', res_id=res.id) }}"
-                    onsubmit="return confirm('정말 취소하시겠습니까?\n취소 후에는 복구가 불가능하며 다시 신청해야 합니다.');">
-                    <button type="submit" class="btn btn-check"
-                        style="border-color: var(--danger); color: var(--danger);">
-                        예약 취소
-                    </button>
-                </form>
+            <div style="text-align: center; margin-bottom: 12px;">
+                {% if res.status == 'pending' %}
+                <span
+                    style="font-size: 0.8rem; font-weight: 700; color: #d69e2e; background: #fffaf0; padding: 4px 12px; border-radius: 20px; border: 1px solid #fef3c7;">
+                    승인 대기 중
+                </span>
+                {% elif res.status == 'confirmed' %}
+                <span
+                    style="font-size: 0.8rem; font-weight: 700; color: var(--success); background: #f0fff4; padding: 4px 12px; border-radius: 20px; border: 1px solid #c6f6d5;">
+                    예약 확정
+                </span>
                 {% endif %}
             </div>
+
+            <form method="post" action="{{ url_for('cancel', res_id=res.id) }}"
+                onsubmit="return confirm('이 예약을 정말 취소하시겠습니까?');">
+                <button type="submit" class="btn btn-outline"
+                    style="width: 100%; color: var(--danger); border-color: #fecaca; height: 36px; font-size: 0.8rem;">
+                    취소하기
+                </button>
+            </form>
         </div>
+        {% endfor %}
     </div>
-    {% else %}
-    <div
-        style="text-align: center; padding: 40px; background: white; border-radius: 16px; border: 1px dashed var(--border-color);">
-        <p style="color: var(--text-sub);">조회된 예약 내역이 없습니다.</p>
-    </div>
-    {% endfor %}
+
+    {% if not reservations %}
+    <p style="text-align: center; color: var(--text-sub); padding: 40px 0;">조회된 내역이 없습니다.</p>
+    {% endif %}
+    {% endif %}
 </div>
-
-<div style="margin-top: 30px; text-align: center;">
-    <a href="{{ url_for('index') }}" class="btn btn-check">메인으로 이동</a>
-</div>
-
-
-{% endif %}
 {% endblock %}
