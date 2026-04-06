@@ -59,7 +59,7 @@
                         <hr>
                         <h2>2. 신청인 정보</h2>
                         이름: <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required><br>
-                        연락처: <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" required placeholder="010-0000-0000"><br>
+                        연락처: <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" required placeholder="연락처 입력" oninput="formatPhoneNumber(this)" maxlength="13"><br>
                         소속: <input type="text" name="school" value="{{ form_data.school if form_data else '' }}" required><br>
                         동아리: <input type="text" name="club" value="{{ form_data.club if form_data else '' }}"><br>
 
@@ -102,6 +102,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='js/common.js') }}"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const facilitySelect = document.getElementById('facilitySelect');

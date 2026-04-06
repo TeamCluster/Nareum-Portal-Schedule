@@ -34,7 +34,7 @@
                 <label>
                     <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">연락처</span>
                     <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" required
-                        placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}" title="010-0000-0000 형식으로 입력해주세요">
+                        placeholder="연락처 입력" oninput="formatPhoneNumber(this)" maxlength="13">
                 </label>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 5px;">
