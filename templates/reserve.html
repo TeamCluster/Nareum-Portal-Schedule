@@ -1,140 +1,163 @@
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <title>예약 신청</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-    <h1>예약 신청서</h1>
-    <p><strong>시설명:</strong> {{ facility.name }}</p>
-    <p><strong>예약 날짜:</strong> {{ selected_date }}</p>
+{% extends "base.html" %}
+
+{% block title %}예약 신청 - {{ facility.name }}{% endblock %}
+
+{% block content %}
+<div class="reservation-container">
+    <div class="section-header" style="margin-bottom: 20px;">
+        <h2 style="margin-bottom: 5px;">예약 신청서</h2>
+        <p style="color: var(--text-sub); font-size: 0.95rem;">
+            신청 정보를 정확히 입력해 주세요.<br /> (시설: <strong>{{ facility.name }}</strong> | 날짜: <strong>{{ selected_date }}</strong>)
+        </p>
+    </div>
 
     {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul class="flash-messages">
+    {% if messages %}
+    <ul class="flash-messages">
         {% for message in messages %}
-          <li>{{ message }}</li>
+        <li>{{ message }}</li>
         {% endfor %}
-        </ul>
-      {% endif %}
+    </ul>
+    {% endif %}
     {% endwith %}
 
-    <form method="post" id="reservationForm">
-        <hr>
-        <h2>1. 신청인 정보</h2>
-        이름: <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required><br>
-        
-        연락처: <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" 
-               required placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}" 
-               title="010-0000-0000 형식으로 입력해주세요"><br>
-        
-        소속: <input type="text" name="school" value="{{ form_data.school if form_data else '' }}" required><br>
-        
-        동아리: <input type="text" name="club" value="{{ form_data.club if form_data else '' }}"><br>
+    <form method="post" id="reservationForm" class="facility-card" style="padding: 24px; border-radius: 16px;">
+        <section class="form-section">
+            <h3 style="border-left: 4px solid var(--primary-color); padding-left: 10px; margin-bottom: 20px;">1. 신청인 정보
+            </h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                <label>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">이름</span>
+                    <input type="text" name="name" value="{{ form_data.name if form_data else '' }}" required
+                        placeholder="신청자 성함">
+                </label>
+                <label>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">연락처</span>
+                    <input type="text" name="contact" value="{{ form_data.contact if form_data else '' }}" required
+                        placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}" title="010-0000-0000 형식으로 입력해주세요">
+                </label>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 5px;">
+                <label>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">소속 (학교/기관)</span>
+                    <input type="text" name="school" value="{{ form_data.school if form_data else '' }}" required
+                        placeholder="예: 광명고등학교">
+                </label>
+                <label>
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">동아리명 (선택)</span>
+                    <input type="text" name="club" value="{{ form_data.club if form_data else '' }}"
+                        placeholder="해당 시 입력">
+                </label>
+            </div>
+        </section>
 
-        <hr>
-        <h2>2. 이용 일정 선택 (시간 선택)</h2>
-        <p>이용할 시간대를 모두 선택해주세요 (연속된 시간으로 최대 2시간 선택 가능)</p>
-        <div class="time-grid">
-            {% for h in range(9, 18) %}
-                {% if h in booked_hours %}
-                    <label class="time-slot disabled">
-                        <input type="checkbox" name="time_slot" value="{{ h }}" disabled>
-                        <span>{{ h }}:00</span><br>(마감)
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 25px 0;">
+
+        <section class="form-section">
+            <h3 style="border-left: 4px solid var(--primary-color); padding-left: 10px; margin-bottom: 5px;">2. 이용 시간 선택
+            </h3>
+            <p style="font-size: 0.85rem; color: var(--text-sub); margin-bottom: 5px;">
+                원하는 시간 블록을 터치하여 선택하세요. (최대 2시간 연속 가능)
+            </p>
+
+            <div class="timeline-container">
+                <div class="timeline-scale">
+                    {% for h in range(9, 19) %}
+                    <div class="timeline-label">{{ "%02d"|format(h) }}</div>
+                    {% endfor %}
+                </div>
+
+                <div class="timeline-bar">
+                    {% for h in range(9, 18) %}
+                    {% set is_booked = h in booked_hours %}
+                    {% set is_checked = form_data and h|string in form_data.getlist('time_slot') %}
+                    <label class="time-slot-block {{ 'booked' if is_booked }} {{ 'selected' if is_checked }}">
+                        <input type="checkbox" name="time_slot" value="{{ h }}" {{ 'disabled' if is_booked }}
+                            {{ 'checked' if is_checked }}>
+                        {% if is_booked %}<span class="status-label">마감</span>{% endif %}
                     </label>
-                {% else %}
-                    <label class="time-slot">
-                        <input type="checkbox" name="time_slot" value="{{ h }}" 
-                        {% if form_data and h|string in form_data.getlist('time_slot') %}checked{% endif %}>
-                        <span>{{ h }}:00</span>
-                    </label>
-                {% endif %}
-            {% endfor %}
-        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
 
-        <hr>
-        <h2>3. 이용 인원</h2>
-        초등: <input type="number" name="elementary" value="{{ form_data.elementary if form_data else '0' }}" min="0"><br>
-        중등: <input type="number" name="middle" value="{{ form_data.middle if form_data else '0' }}" min="0"><br>
-        고등: <input type="number" name="high" value="{{ form_data.high if form_data else '0' }}" min="0"><br>
-        후기청소년: <input type="number" name="teen" value="{{ form_data.teen if form_data else '0' }}" min="0"><br>
-        성인: <input type="number" name="adult" value="{{ form_data.adult if form_data else '0' }}" min="0"><br>
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 25px 0;">
 
-        <hr>
-        <h2>4. 필요 물품</h2>
-        {% set equipments = ['앰프', '스피커', '마이크', '키보드'] %}
-        {% for item in equipments %}
-            <label>
-                <input type="checkbox" name="equipment" value="{{ item }}"
-                {% if form_data and item in form_data.getlist('equipment') %}checked{% endif %}>
-                {{ item }}
+        <section class="form-section">
+            <h3 style="border-left: 4px solid var(--primary-color); padding-left: 10px; margin-bottom: 15px;">3. 이용 인원
+            </h3>
+            <div style="display: flex; flex-wrap: wrap; gap: 15px;">
+                <label style="flex: 1; min-width: 120px;">
+                    <span style="font-size: 0.8rem; color: var(--text-sub);">초등</span>
+                    <input type="number" name="elementary" value="{{ form_data.elementary if form_data else '0' }}"
+                        min="0">
+                </label>
+                <label style="flex: 1; min-width: 120px;">
+                    <span style="font-size: 0.8rem; color: var(--text-sub);">중등</span>
+                    <input type="number" name="middle" value="{{ form_data.middle if form_data else '0' }}" min="0">
+                </label>
+                <label style="flex: 1; min-width: 120px;">
+                    <span style="font-size: 0.8rem; color: var(--text-sub);">고등</span>
+                    <input type="number" name="high" value="{{ form_data.high if form_data else '0' }}" min="0">
+                </label>
+                <label style="flex: 1; min-width: 120px;">
+                    <span style="font-size: 0.8rem; color: var(--text-sub);">후기청소년</span>
+                    <input type="number" name="teen" value="{{ form_data.teen if form_data else '0' }}" min="0">
+                </label>
+                <label style="flex: 1; min-width: 120px;">
+                    <span style="font-size: 0.8rem; color: var(--text-sub);">성인</span>
+                    <input type="number" name="adult" value="{{ form_data.adult if form_data else '0' }}" min="0">
+                </label>
+            </div>
+        </section>
+
+        {% if '연습' in facility.type %}
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 25px 0;">
+        <section class="form-section">
+            <h3 style="border-left: 4px solid var(--primary-color); padding-left: 10px; margin-bottom: 15px;">4. 필요 물품
+            </h3>
+            <div
+                style="display: flex; gap: 20px; flex-wrap: wrap; background: #f8fafc; padding: 15px; border-radius: 8px;">
+                {% set equipments = ['앰프', '스피커', '마이크', '키보드'] %}
+                {% for item in equipments %}
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 500;">
+                    <input type="checkbox" name="equipment" value="{{ item }}" {% if form_data and item in
+                        form_data.getlist('equipment') %}checked{% endif %}
+                        style="width: 18px; height: 18px; margin: 0;">
+                    {{ item }}
+                </label>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 25px 0;">
+
+        <section class="form-section"
+            style="background: #fffaf0; padding: 20px; border-radius: 12px; border: 1px solid #feebc8;">
+            <h3 style="color: var(--warning); margin-top: 0px; margin-bottom: 12px; font-size: 1.1rem;">공지 및 준수사항</h3>
+            <ul style="padding-left: 20px; font-size: 0.85rem; color: #744210; line-height: 1.7;">
+                <li>대관 신청은 최소 3일 전부터 가능하며 당일 대관은 불가합니다.</li>
+                <li>이름/연락처당 하루 1회(최대 2시간) 및 일주일에 2회까지만 예약할 수 있습니다.</li>
+                <li>센터 내 음식물 반입을 금지합니다.</li>
+                <li>사용 후 정리정돈 및 전자기기 전원 확인은 필수입니다.</li>
+            </ul>
+            <label
+                style="display: flex; align-items: center; gap: 10px; margin-top: 15px; font-weight: 700; color: #2d3748; cursor: pointer;">
+                <input type="checkbox" id="agree" name="agree" value="1" style="width: 20px; height: 20px; margin: 0;">
+                위 준수사항을 모두 확인했으며, 이에 동의합니다.
             </label>
-        {% endfor %}
-        <br>
+        </section>
 
-        <hr>
-        <h2>5. 공지 및 준수사항</h2>
-        <ul>
-            <li>대관 신청은 최소 3일 전부터 가능하며 당일 대관은 불가합니다.</li>
-            <li>이름/연락처당 하루 1회(최대 2시간) 및 일주일에 2회까지만 예약할 수 있습니다.</li>
-            <li>음식물 반입을 금지합니다.</li>
-            <li>사용 후 정리정돈은 필수입니다.</li>
-        </ul>
-        <label>
-            <input type="checkbox" id="agree" name="agree" value="1">
-            위 준수사항을 모두 확인했으며, 이에 동의합니다.
-        </label><br><br>
-
-        <button id="submitBtn" type="submit" class="btn-primary" disabled>예약 신청하기</button>
-        <a href="{{ url_for('index') }}" class="btn">돌아가기</a>
+        <div style="display: flex; gap: 12px; margin-top: 30px;">
+            <a href="{{ url_for('index', date=selected_date) }}" class="btn btn-check" style="flex: 1;">돌아가기</a>
+            <button id="submitBtn" type="submit" class="btn-primary" style="flex: 2; height: 44px; font-size: 1rem;"
+                disabled title="시간 선택과 약관 동의가 필요합니다">예약 신청 완료</button>
+        </div>
     </form>
+</div>
+{% endblock %}
 
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-    
-    <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const timeCheckboxes = document.querySelectorAll('input[name="time_slot"]');
-            timeCheckboxes.forEach(chk => {
-                chk.addEventListener('change', function() {
-                    const checkedBoxes = Array.from(timeCheckboxes).filter(c => c.checked);
-                    
-                    if (checkedBoxes.length > 2) {
-                        alert("예약은 하루 최대 2시간(2칸)까지만 가능합니다.");
-                        this.checked = false;
-                        return;
-                    }
-                    
-                    if (checkedBoxes.length === 2) {
-                        const val1 = parseInt(checkedBoxes[0].value);
-                        const val2 = parseInt(checkedBoxes[1].value);
-                        if (Math.abs(val1 - val2) !== 1) {
-                            alert("이용 시간은 연속된 시간으로만 선택 가능합니다.");
-                            this.checked = false;
-                            return;
-                        }
-                    }
-                });
-            });
-
-            const form = document.getElementById('reservationForm');
-            if (form) {
-                form.addEventListener('submit', function(e) {
-                    const elem = parseInt(document.querySelector('input[name="elementary"]').value) || 0;
-                    const mid = parseInt(document.querySelector('input[name="middle"]').value) || 0;
-                    const high = parseInt(document.querySelector('input[name="high"]').value) || 0;
-                    const teen = parseInt(document.querySelector('input[name="teen"]').value) || 0;
-                    const adult = parseInt(document.querySelector('input[name="adult"]').value) || 0;
-                    
-                    const totalParticipants = elem + mid + high + teen + adult;
-                    
-                    if (totalParticipants === 0) {
-                        e.preventDefault(); 
-                        alert("이용 인원은 총합 최소 1명 이상이어야 합니다. 인원수를 입력해주세요.");
-                    }
-                });
-            }
-        });
-    </script>
-</body>
-</html>
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/reserve.js') }}"></script>
+{% endblock %}

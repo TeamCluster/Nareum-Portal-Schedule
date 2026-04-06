@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
 from models import db, Facility, Reservation
 from dotenv import load_dotenv
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from sqlalchemy import text
 import os, sys, io
 
@@ -268,27 +268,45 @@ def manage_logout():
 
 @app.route('/manage')
 def manage():
-    # 1. 승인 대기 목록 (요약용 3개만)
-    pending_query = Reservation.query.filter_by(status='pending', is_deleted=False).order_by(Reservation.start_time)
-    pending_count = pending_query.count()
-    pending_preview = pending_query.limit(3).all()
+    # 1. 날짜 파라미터 처리 (기본값: 오늘)
+    selected_date_str = request.args.get('date')
+    try:
+        if selected_date_str:
+            selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d').date()
+        else:
+            selected_date = date.today()
+    except ValueError:
+        selected_date = date.today()
 
-    # 2. 오늘의 예약 현황
-    today = datetime.today().date()
-    start_of_today = datetime.combine(today, datetime.min.time())
-    end_of_today = start_of_today + timedelta(days=1)
+    # 2. 이전/다음 날짜 계산
+    prev_date = (selected_date - timedelta(days=1)).isoformat()
+    next_date = (selected_date + timedelta(days=1)).isoformat()
+    selected_date_iso = selected_date.isoformat()
+
+    # 3. 승인 대기 목록 조회 (예시)
+    pending_reservations = Reservation.query.filter_by(status='pending').order_by(Reservation.start_time).all()
+    pending_count = len(pending_reservations)
+    pending_preview = pending_reservations[:3]
+
+    # 4. 선택된 날짜의 예약 현황 조회 (시설별 그룹화를 위해 시설명으로 정렬)
+    # start_time이 selected_date와 일치하는 데이터 필터링
+    start_of_day = datetime.combine(selected_date, datetime.min.time())
+    end_of_day = datetime.combine(selected_date, datetime.max.time())
     
     todays_reservations = Reservation.query.filter(
-        Reservation.start_time >= start_of_today,
-        Reservation.start_time < end_of_today,
-        Reservation.is_deleted == False,
-        Reservation.status.in_(['confirmed', 'pending'])
-    ).order_by(Reservation.start_time).all()
+        Reservation.start_time >= start_of_day,
+        Reservation.start_time <= end_of_day,
+        Reservation.is_deleted == False
+    ).join(Facility).order_by(Facility.name, Reservation.start_time).all()
 
-    return render_template('manage.html', 
-                           pending_count=pending_count, 
+    return render_template('manage.html',
+                           pending_count=pending_count,
                            pending_preview=pending_preview,
-                           todays_reservations=todays_reservations)
+                           todays_reservations=todays_reservations,
+                           selected_date=selected_date_iso,
+                           prev_date=prev_date,
+                           next_date=next_date,
+                           SERVICE_NAME="나름센터 관리자")
 
 @app.route('/manage/requests')
 def manage_requests():
@@ -537,11 +555,11 @@ if __name__ == "__main__":
 
         if not Facility.query.first():
             facilities = [
-                Facility(name="활력충전터", type="연습실", description="음악 연습 공간"),
-                Facility(name="창의키움터", type="연습실", description="학습 공간"),
-                Facility(name="탐구개발터", type="회의실", description="3D 프린터 및 회의"),
-                Facility(name="상상이룸터", type="회의실"),
-                Facility(name="생각나눔터", type="회의실")
+                Facility(name="활력충전터", type="연습실", image_url="/static/img/room001.jpg", description="밴드/음악 연습 공간"),
+                Facility(name="창의키움터", type="활동실", image_url="/static/img/room002.jpg", description="과학 활동 공간"),
+                Facility(name="탐구개발터", type="활동실", image_url="/static/img/room003.jpg", description="3D 프린터가 있는 오픈LAB실"),
+                Facility(name="상상이룸터", type="연습실", image_url="/static/img/room004.jpg", description="댄스 연습 특화 공간"),
+                Facility(name="생각나눔터", type="회의실", image_url="/static/img/room005.jpg", description="회의 공간"),
             ]
             db.session.add_all(facilities)
             db.session.commit()
