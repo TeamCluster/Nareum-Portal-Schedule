@@ -33,7 +33,7 @@
                 <label>
                     <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-sub);">연락처</span>
                     <input type="text" name="contact" value="{{ search_contact if search_contact else '' }}" required
-                        placeholder="010-0000-0000" pattern="010-[0-9]{4}-[0-9]{4}">
+                        placeholder="연락처 입력" oninput="formatPhoneNumber(this)" maxlength="13">
                 </label>
             </div>
             <button type="submit" class="btn-primary" style="width: 100%;">조회하기</button>
