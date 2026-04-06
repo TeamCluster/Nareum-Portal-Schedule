@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from datetime import datetime, date, timedelta
 from sqlalchemy import text
 import os, sys, io
+import uuid
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -96,7 +97,20 @@ def reserve(facility_id):
         flash("예약할 날짜를 먼저 선택해주세요.")
         return redirect(url_for("index"))
 
-    selected_date_obj = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    try:
+        selected_date_obj = datetime.strptime(selected_date_str, "%Y-%m-%d").date()
+    except ValueError:
+        flash("잘못된 날짜 형식입니다.")
+        return redirect(url_for("index"))
+
+    today = datetime.today().date()
+    min_date_obj = today + timedelta(days=3)
+    max_date_obj = today + timedelta(days=14)
+    
+    if selected_date_obj < min_date_obj or selected_date_obj > max_date_obj:
+        flash(f"부정확한 접근입니다. 예약은 {min_date_obj.strftime('%Y-%m-%d')} 부터 {max_date_obj.strftime('%Y-%m-%d')} 까지만 가능합니다.")
+        return redirect(url_for("index"))
+
     facility = Facility.query.get_or_404(facility_id)
 
     existing_res = Reservation.query.filter(
@@ -189,7 +203,10 @@ def reserve(facility_id):
             flash("선택하신 시간에 이미 다른 예약이 진행 중입니다.")
             return redirect(url_for('reserve', facility_id=facility_id, date=selected_date_str))
 
+        new_access_id = str(uuid.uuid4())
+
         new_res = Reservation(
+            access_id=new_access_id,
             facility_id=facility_id,
             applicant_name=name,
             applicant_contact=contact,
@@ -205,13 +222,13 @@ def reserve(facility_id):
         db.session.add(new_res)
         db.session.commit()
 
-        return redirect(url_for("reservation_complete", res_id=new_res.id))
+        return redirect(url_for("reservation_complete", access_id=new_res.access_id))
 
     return render_template("reserve.html", facility_id=facility_id, selected_date=selected_date_str, facility=facility, booked_hours=booked_hours, form_data={})
 
-@app.route('/complete/<int:res_id>')
-def reservation_complete(res_id):
-    res = Reservation.query.get_or_404(res_id)
+@app.route('/complete/<string:access_id>')
+def reservation_complete(access_id):
+    res = Reservation.query.filter_by(access_id=access_id).first_or_404()
     return render_template("complete.html", reservation=res, SERVICE_NAME=SERVICE_NAME)
 
 @app.route('/check', methods=['GET', 'POST'])
@@ -522,7 +539,10 @@ def manage_add():
         }
         equipment_list = form_data.getlist("equipment")
 
+        new_access_id = str(uuid.uuid4())
+
         new_res = Reservation(
+            access_id=new_access_id,
             facility_id=facility_id,
             applicant_name=form_data.get("name"),
             applicant_contact=form_data.get("contact"),
@@ -546,6 +566,17 @@ if __name__ == "__main__":
     with app.app_context():
         db.create_all()
         
+        try:
+            db.session.execute(text("ALTER TABLE reservations ADD COLUMN access_id VARCHAR(36);"))
+            db.session.commit()
+            
+            existing_reservations = Reservation.query.filter(Reservation.access_id == None).all()
+            for r in existing_reservations:
+                r.access_id = str(uuid.uuid4())
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            
         try:
             db.session.execute(text("ALTER TABLE reservations ADD COLUMN is_deleted BOOLEAN NOT NULL DEFAULT 0;"))
             db.session.execute(text("ALTER TABLE reservations ADD COLUMN reject_reason VARCHAR(255);"))

@@ -17,6 +17,9 @@ class Facility(db.Model):
 class Reservation(db.Model):
     __tablename__ = 'reservations'
     id = db.Column(db.Integer, primary_key=True)
+
+    access_id = db.Column(db.String(36), unique=True, nullable=True)
+    
     facility_id = db.Column(db.Integer, db.ForeignKey('facilities.id', ondelete='CASCADE'), nullable=False)
     
     applicant_name = db.Column(db.String(100), nullable=False)
