@@ -14,6 +14,16 @@ class Facility(db.Model):
     created_at = db.Column(db.DateTime(timezone=True), server_default=func.now())
     reservations = db.relationship('Reservation', backref='facility', lazy=True, cascade="all, delete-orphan")
 
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "capacity": self.capacity,
+            "description": self.description,
+            "image_url": self.image_url,
+        }
+
 class Reservation(db.Model):
     __tablename__ = 'reservations'
     id = db.Column(db.Integer, primary_key=True)
@@ -40,3 +50,25 @@ class Reservation(db.Model):
 
     def __repr__(self):
         return f'<Reservation {self.id} {self.start_time}~{self.end_time}>'
+
+    def to_dict(self, include_facility=True):
+        data = {
+            "id": self.id,
+            "access_id": self.access_id,
+            "facility_id": self.facility_id,
+            "applicant_name": self.applicant_name,
+            "applicant_contact": self.applicant_contact,
+            "applicant_school": self.applicant_school,
+            "applicant_club": self.applicant_club,
+            "status": self.status,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "participant_info": self.participant_info or {},
+            "requested_equipment": self.requested_equipment or [],
+            "is_deleted": self.is_deleted,
+            "reject_reason": self.reject_reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+        if include_facility and self.facility is not None:
+            data["facility"] = self.facility.to_dict()
+        return data
