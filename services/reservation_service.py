@@ -377,6 +377,71 @@ def dashboard(conn, date_str=None):
     }
 
 
+def day_grid(conn, date_str=None):
+    """일자별 시설×시간 현황 매트릭스.
+
+    행=시설, 열=시간(OPEN~CLOSE). 각 시설은 연속 구간(segments) 리스트로 반환하여
+    프론트가 colspan 으로 병합 렌더링할 수 있게 한다.
+      segment(free): {type:'free', from_hour, to_hour}
+      segment(res) : {type:'res', from_hour, to_hour, res_id, status, name, contact}
+    """
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else date.today()
+    except (ValueError, TypeError):
+        target = date.today()
+
+    day_start, day_end = _day_bounds_iso(target)
+    rows = conn.execute(
+        "SELECT id, facility_id, applicant_name, applicant_contact, status, start_time, end_time"
+        " FROM reservations WHERE start_time >= ? AND start_time < ? AND is_deleted = 0"
+        f" AND status IN ({_active_placeholders()}) ORDER BY start_time",
+        [day_start, day_end, *config.ACTIVE_STATUSES],
+    ).fetchall()
+
+    by_fac = {}
+    for r in rows:
+        s = datetime.strptime(r["start_time"], ISO).hour
+        e = datetime.strptime(r["end_time"], ISO).hour
+        by_fac.setdefault(r["facility_id"], []).append({
+            "res_id": r["id"], "status": r["status"], "name": r["applicant_name"],
+            "contact": r["applicant_contact"], "start_hour": s, "end_hour": e,
+        })
+
+    facilities = []
+    for f in facility_service.get_facilities(conn):
+        resv = sorted(by_fac.get(f["id"], []), key=lambda x: x["start_hour"])
+        segments = []
+        h, idx = config.OPEN_HOUR, 0
+        while h < config.CLOSE_HOUR:
+            if idx < len(resv) and resv[idx]["start_hour"] <= h:
+                seg = resv[idx]
+                idx += 1
+                end = min(seg["end_hour"], config.CLOSE_HOUR)
+                if end <= h:
+                    continue  # 이미 지난 구간(방어적)
+                segments.append({
+                    "type": "res", "from_hour": h, "to_hour": end,
+                    "res_id": seg["res_id"], "status": seg["status"],
+                    "name": seg["name"], "contact": seg["contact"],
+                })
+                h = end
+            else:
+                next_start = resv[idx]["start_hour"] if idx < len(resv) else config.CLOSE_HOUR
+                end = min(max(next_start, h + 1), config.CLOSE_HOUR)
+                segments.append({"type": "free", "from_hour": h, "to_hour": end})
+                h = end
+        facilities.append({"id": f["id"], "name": f["name"], "type": f["type"],
+                           "segments": segments})
+
+    return {
+        "date": target.isoformat(),
+        "open_hour": config.OPEN_HOUR,
+        "close_hour": config.CLOSE_HOUR,
+        "hours": list(range(config.OPEN_HOUR, config.CLOSE_HOUR)),
+        "facilities": facilities,
+    }
+
+
 def calendar_events(conn):
     rows = conn.execute(
         "SELECT * FROM reservations WHERE is_deleted = 0"

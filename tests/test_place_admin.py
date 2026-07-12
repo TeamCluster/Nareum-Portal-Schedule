@@ -126,6 +126,33 @@ class TestInfoUpdate:
         assert admin_client.put(f"{BASE}/admin/info", json={"full_name": "  "}).status_code == 400
 
 
+class TestDayGrid:
+    def test_shape(self, admin_client):
+        d = admin_client.get(f"{BASE}/admin/day-grid?date={valid_date()}").get_json()
+        assert d["open_hour"] == 9 and d["close_hour"] == 18
+        assert len(d["facilities"]) == 5
+        # 예약 없으면 전부 free 한 구간(9~18)
+        f0 = d["facilities"][0]
+        assert f0["segments"] == [{"type": "free", "from_hour": 9, "to_hour": 18}]
+
+    def test_reservation_segment(self, client, admin_client):
+        client.post(f"{BASE}/reservations", json=reservation_payload(facility_id=1, hours=[10, 11]))
+        d = admin_client.get(f"{BASE}/admin/day-grid?date={valid_date()}").get_json()
+        fac = next(f for f in d["facilities"] if f["id"] == 1)
+        res_segs = [s for s in fac["segments"] if s["type"] == "res"]
+        assert len(res_segs) == 1
+        seg = res_segs[0]
+        assert seg["from_hour"] == 10 and seg["to_hour"] == 12
+        assert seg["status"] == "pending" and seg["name"] == "홍길동"
+        # free + res + free 로 전체 9~18 을 덮어야 함
+        assert fac["segments"][0]["from_hour"] == 9
+        assert fac["segments"][-1]["to_hour"] == 18
+        assert sum(s["to_hour"] - s["from_hour"] for s in fac["segments"]) == 9
+
+    def test_requires_login(self, client):
+        assert client.get(f"{BASE}/admin/day-grid").status_code == 401
+
+
 class TestFacilityCrud:
     def test_add_update_delete(self, admin_client):
         # add

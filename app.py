@@ -300,6 +300,12 @@ def _register_place(app):
         return jsonify(reservation_service.dashboard(
             get_place_db(slug), request.args.get("date")))
 
+    @app.get("/api/<slug>/admin/day-grid")
+    @place_admin_required
+    def place_day_grid(slug):
+        return jsonify(reservation_service.day_grid(
+            get_place_db(slug), request.args.get("date")))
+
     @app.get("/api/<slug>/admin/requests")
     @place_admin_required
     def place_requests(slug):
