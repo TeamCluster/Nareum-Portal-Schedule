@@ -679,6 +679,39 @@ def day_grid(conn, date_str=None):
     return base
 
 
+def week_grid(conn, date_str=None):
+    """주간(월~일) 시설별 현황. 각 날짜를 day_grid 로 계산해 모은다.
+
+    프론트는 행=시간, 열=[요일 × 시설] 리소스 그리드로 렌더한다.
+    hour_min/max 는 그 주에서 운영하는 날들의 최소 시작 ~ 최대 종료 시각.
+    """
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else date.today()
+    except (ValueError, TypeError):
+        target = date.today()
+
+    monday = target - timedelta(days=target.weekday())
+    days = [day_grid(conn, (monday + timedelta(days=i)).isoformat()) for i in range(7)]
+
+    opens = [d["open_hour"] for d in days if d["is_open"]]
+    closes = [d["close_hour"] for d in days if d["is_open"]]
+    hour_min = min(opens) if opens else config.OPEN_HOUR
+    hour_max = max(closes) if closes else config.CLOSE_HOUR
+
+    facilities = [{"id": f["id"], "name": f["name"]}
+                  for f in facility_service.get_facilities(conn)]
+
+    return {
+        "week_start": monday.isoformat(),
+        "prev_week": (monday - timedelta(days=7)).isoformat(),
+        "next_week": (monday + timedelta(days=7)).isoformat(),
+        "hour_min": hour_min,
+        "hour_max": hour_max,
+        "facilities": facilities,
+        "days": days,
+    }
+
+
 def create_admin_reservation(conn, data):
     """관리자 직접 추가 — 확정 상태(0명 허용, 시간제한 없음). 중복/정기활동만 차단."""
     facility_id = data.get("facility_id")

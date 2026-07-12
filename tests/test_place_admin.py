@@ -153,6 +153,29 @@ class TestDayGrid:
         assert client.get(f"{BASE}/admin/day-grid").status_code == 401
 
 
+class TestWeekGrid:
+    def test_shape(self, admin_client):
+        d = admin_client.get(f"{BASE}/admin/week-grid?date={valid_date()}").get_json()
+        assert len(d["days"]) == 7
+        assert len(d["facilities"]) == 5
+        assert d["hour_min"] == 9 and d["hour_max"] == 18
+        # 각 날짜는 day_grid 구조
+        assert all("segments" in day["facilities"][0] for day in d["days"] if day["is_open"])
+
+    def test_reservation_appears_in_week(self, client, admin_client):
+        client.post(f"{BASE}/reservations", json=reservation_payload(facility_id=1, hours=[10, 11]))
+        d = admin_client.get(f"{BASE}/admin/week-grid?date={valid_date()}").get_json()
+        found = False
+        for day in d["days"]:
+            for fac in day["facilities"]:
+                if fac["id"] == 1 and any(s["type"] == "res" for s in fac["segments"]):
+                    found = True
+        assert found
+
+    def test_requires_login(self, client):
+        assert client.get(f"{BASE}/admin/week-grid").status_code == 401
+
+
 class TestFacilityCrud:
     def test_add_update_delete(self, admin_client):
         # add
