@@ -65,7 +65,7 @@
 - [ ] 정식 DB 마이그레이션(Flask-Migrate) 미도입.
 - [ ] 예약 신청 시 서버 측 rate limiting/reCAPTCHA 없음(무분별 신청 방지 필요 시 추가).
 - [ ] 이메일/문자 알림(승인·거절 시) 없음.
-- [ ] 자동화 테스트 부재 — `pytest` + `app.test_client()`로 helpers 규칙부터 커버 권장.
+- [x] 자동화 테스트 — `tests/`에 `pytest` 스위트 추가(helpers 규칙 + 공개/관리자 API, 53 케이스). `pip install -r requirements-dev.txt && pytest`.
 - [ ] `overlap`/`same_day`/`weekly` 검사에 트랜잭션 잠금이 없어 동시 요청 시 극단적으로 이중 예약 가능(현재 트래픽 규모에선 사실상 무해).
 
 ## 9. 프론트엔드와의 계약

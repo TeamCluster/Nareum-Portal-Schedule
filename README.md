@@ -16,6 +16,13 @@ python app.py          # http://127.0.0.1:5000
 ```
 최초 실행 시 테이블 생성 · 경량 마이그레이션 · 기본 시설 5개 시딩이 자동 수행됩니다.
 
+## 테스트
+```bash
+pip install -r requirements-dev.txt
+pytest                 # tests/ 하위 pytest 스위트 (인메모리 SQLite)
+```
+`tests/`는 예약 도메인 규칙(helpers)과 공개·관리자 API 흐름을 커버합니다(53 케이스).
+
 ## 구조
 ```
 app.py            # create_app() 팩토리 + init_db() 시딩/마이그레이션
