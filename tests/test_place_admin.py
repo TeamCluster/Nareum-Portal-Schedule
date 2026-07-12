@@ -106,6 +106,26 @@ class TestUpdateDashboard:
         assert len(events) == 1 and events[0]["color"] == "#ff9800"
 
 
+class TestInfoUpdate:
+    def test_admin_updates_own_info(self, client, admin_client):
+        r = admin_client.put(f"{BASE}/admin/info", json={
+            "full_name": "나름청소년활동센터(수정)", "phone": "031-123-4567",
+            "address": "경기도 나름시 청소년로 1", "email": "hello@nareum.kr",
+        })
+        assert r.status_code == 200
+        info = client.get(f"{BASE}/info").get_json()
+        assert info["full_name"] == "나름청소년활동센터(수정)"
+        assert info["phone"] == "031-123-4567"
+        assert info["address"] == "경기도 나름시 청소년로 1"
+        assert info["email"] == "hello@nareum.kr"
+
+    def test_update_requires_login(self, client):
+        assert client.put(f"{BASE}/admin/info", json={"phone": "x"}).status_code == 401
+
+    def test_empty_full_name_rejected(self, admin_client):
+        assert admin_client.put(f"{BASE}/admin/info", json={"full_name": "  "}).status_code == 400
+
+
 class TestFacilityCrud:
     def test_add_update_delete(self, admin_client):
         # add

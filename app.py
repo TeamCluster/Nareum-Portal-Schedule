@@ -282,6 +282,18 @@ def _register_place(app):
         return jsonify(reservation_service.cancel(get_place_db(slug), res_id))
 
     # ---------------- 관리자 (보호) ----------------
+    @app.put("/api/<slug>/admin/info")
+    @place_admin_required
+    def place_admin_update_info(slug):
+        """기관 관리자가 자기 기관의 표시명/연락처를 수정 (slug·비밀번호는 불가)."""
+        d = request.get_json(silent=True) or {}
+        ok, msg = place_service.update_place_info(
+            slug,
+            full_name=d.get("full_name"), short_name=d.get("short_name"),
+            address=d.get("address"), phone=d.get("phone"), email=d.get("email"),
+        )
+        return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
     @app.get("/api/<slug>/admin/dashboard")
     @place_admin_required
     def place_dashboard(slug):
