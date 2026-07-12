@@ -24,7 +24,7 @@ MAX_FULL_NAME_LENGTH = 100
 MAX_SHORT_NAME_LENGTH = 20
 
 _PUBLIC_COLS = (
-    "id, slug, full_name, short_name, address, phone, email, created_at"
+    "id, slug, full_name, short_name, address, phone, email, header_image, created_at"
 )
 
 
@@ -167,6 +167,14 @@ def update_place_password(slug: str, new_password: str):
     if cur.rowcount == 0:
         return False, "해당 기관을 찾을 수 없습니다."
     return True, "기관 관리자 비밀번호가 변경되었습니다."
+
+
+def set_header_image(slug: str, url):
+    """공개 헤더 로고 URL 을 기관에 반영."""
+    db = get_super_db()
+    db.execute("UPDATE places SET header_image = ? WHERE slug = ?", (url or "", slug))
+    db.commit()
+    return get_place(slug)
 
 
 def verify_place_password(slug: str, password: str) -> bool:

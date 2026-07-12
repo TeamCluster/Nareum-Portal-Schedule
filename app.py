@@ -194,6 +194,30 @@ def _register_super(app):
         ok, msg = place_service.update_place_password(slug, d.get("new_password", ""))
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
 
+    @app.post("/api/super/places/<slug>/header")
+    @super_required
+    def super_place_header(slug):
+        """기관 헤더 로고 업로드(multipart, field=image) → static/<slug>/header.<ext>."""
+        place = place_service.get_place(slug)
+        if not place:
+            raise ApiError("기관을 찾을 수 없습니다.", 404)
+        file = request.files.get("image")
+        if not file or not file.filename:
+            raise ApiError("이미지 파일을 선택해주세요.")
+        url = image_service.save_header_image(slug, file, old_url=place.get("header_image"))
+        place_service.set_header_image(slug, url)
+        return jsonify({"ok": True, "header_image": url})
+
+    @app.delete("/api/super/places/<slug>/header")
+    @super_required
+    def super_place_header_delete(slug):
+        place = place_service.get_place(slug)
+        if not place:
+            raise ApiError("기관을 찾을 수 없습니다.", 404)
+        image_service.delete_image_file(place.get("header_image"))
+        place_service.set_header_image(slug, None)
+        return jsonify({"ok": True})
+
     # --- 공통 휴무일/공휴일 (전 기관 공유) ---
     @app.get("/api/super/holidays")
     @super_required
@@ -260,7 +284,8 @@ def _register_place(app):
         return jsonify({
             "slug": p["slug"], "full_name": p["full_name"], "short_name": p["short_name"],
             "address": p.get("address", ""), "phone": p.get("phone", ""),
-            "email": p.get("email", ""),
+            "email": p.get("email", ""), "header_image": p.get("header_image", ""),
+            "operating_hours": reservation_service.get_operating_hours(get_place_db(slug)),
         })
 
     @app.get("/api/<slug>/facilities")

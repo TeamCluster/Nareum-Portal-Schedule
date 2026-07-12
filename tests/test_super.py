@@ -1,5 +1,8 @@
 """슈퍼 관리자 API 통합 테스트."""
+import io
+
 from conftest import SLUG, SUPER_PW
+from test_scheduling import _PNG
 
 
 class TestSuperAuth:
@@ -92,3 +95,32 @@ class TestPlacesCrud:
         super_client.post("/api/super/places/pw/password", json={"new_password": "zzzzzz"})
         assert client.post("/api/pw/admin/login", json={"password": "zzzzzz"}).status_code == 200
         assert client.post("/api/pw/admin/login", json={"password": "abcdef"}).status_code == 401
+
+
+class TestPlaceHeader:
+    def _upload(self, super_client, name="logo.png", data=_PNG):
+        return super_client.post(
+            f"/api/super/places/{SLUG}/header",
+            data={"image": (io.BytesIO(data), name)},
+            content_type="multipart/form-data",
+        )
+
+    def test_upload_reflected_in_info(self, super_client, client):
+        r = self._upload(super_client)
+        assert r.status_code == 200
+        url = r.get_json()["header_image"]
+        assert url.startswith(f"/static/{SLUG}/header.png")
+        info = client.get(f"/api/{SLUG}/info").get_json()
+        assert info["header_image"] == url
+        assert len(info["operating_hours"]) == 7  # /info 에 운영시간 포함
+
+    def test_delete(self, super_client, client):
+        self._upload(super_client)
+        assert super_client.delete(f"/api/super/places/{SLUG}/header").status_code == 200
+        assert client.get(f"/api/{SLUG}/info").get_json()["header_image"] == ""
+
+    def test_reject_non_image(self, super_client):
+        assert self._upload(super_client, "note.txt", b"hello").status_code == 400
+
+    def test_guard(self, client):
+        assert client.post(f"/api/super/places/{SLUG}/header").status_code == 401

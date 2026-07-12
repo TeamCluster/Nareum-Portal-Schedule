@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS places (
     address       TEXT    DEFAULT '',   -- 공개 푸터 표기용 연락처
     phone         TEXT    DEFAULT '',
     email         TEXT    DEFAULT '',
+    header_image  TEXT    DEFAULT '',   -- 공개 헤더 로고 (static/<slug>/header.<ext>)
     created_at    TEXT    NOT NULL
 );
 
@@ -240,7 +241,7 @@ def init_super_db() -> None:
 def _migrate_places_contact_columns(conn: sqlite3.Connection) -> None:
     """옛 places 스키마에 연락처 컬럼이 없으면 추가 (멱등)."""
     cols = {r[1] for r in conn.execute("PRAGMA table_info(places)").fetchall()}
-    for col in ("address", "phone", "email"):
+    for col in ("address", "phone", "email", "header_image"):
         if col not in cols:
             conn.execute(f"ALTER TABLE places ADD COLUMN {col} TEXT DEFAULT ''")
 
