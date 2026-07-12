@@ -24,6 +24,10 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_FOLDER = os.environ.get("DB_FOLDER") or os.path.join(BASE_DIR, "db")
 SUPER_DB_PATH = os.path.join(DB_FOLDER, "super.sqlite3")
 
+# 정적 파일 루트(시설 이미지 업로드 저장 위치). 업로드 이미지는
+# static/<slug>/facility/<파일명> 에 저장되고 /static/... 로 서빙된다.
+STATIC_ROOT = os.environ.get("STATIC_ROOT") or os.path.join(BASE_DIR, "static")
+
 
 def place_db_path(slug: str) -> str:
     """기관 slug 로부터 해당 기관의 DB 파일 경로 반환."""
@@ -70,9 +74,14 @@ SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower()
 BOOKING_MIN_DAYS = int(os.environ.get("BOOKING_MIN_DAYS", 3))
 BOOKING_MAX_DAYS = int(os.environ.get("BOOKING_MAX_DAYS", 14))
 
-# 운영 시간: 예약 시작 가능 시각은 OPEN_HOUR .. CLOSE_HOUR-1
+# 기본 운영 시간(기관 생성 시 요일별 operating_hours 기본값). 실제 운영시간은
+# 기관 관리자가 요일별로 조정하며, 예약 로직은 그 값을 따른다.
 OPEN_HOUR = 9
 CLOSE_HOUR = 18
+
+# 관리자가 설정 가능한 운영시간의 절대 허용 범위(시각).
+HOUR_ABS_MIN = 6
+HOUR_ABS_MAX = 24
 
 # 공개 신청 제한
 MAX_HOURS_PUBLIC = 2   # 1회 최대 예약 시간

@@ -27,6 +27,7 @@ from config import is_valid_slug
 from db import get_place_db, get_super_db
 from services import (
     facility_service,
+    image_service,
     place_service,
     reservation_service,
     super_service,
@@ -246,6 +247,16 @@ def _register_place(app):
         return jsonify(reservation_service.availability(
             get_place_db(slug), request.args.get("date")))
 
+    @app.get("/api/<slug>/day-config")
+    @place_required
+    def place_day_config(slug):
+        date_str = request.args.get("date")
+        if not date_str:
+            return jsonify({"is_open": True, "open_hour": config.OPEN_HOUR,
+                            "close_hour": config.CLOSE_HOUR, "closed_reason": ""})
+        target = reservation_service.parse_date(date_str)
+        return jsonify(reservation_service.day_config(get_place_db(slug), target))
+
     @app.get("/api/<slug>/facilities/<int:facility_id>/booked-times")
     @place_required
     def place_booked_times(slug, facility_id):
@@ -363,6 +374,52 @@ def _register_place(app):
         return jsonify(reservation_service.reject(
             get_place_db(slug), res_id, d.get("reject_reason")))
 
+    # ---------------- 관리자 — 운영 설정 ----------------
+    @app.get("/api/<slug>/admin/operating-hours")
+    @place_admin_required
+    def place_operating_hours_get(slug):
+        return jsonify({"operating_hours": reservation_service.get_operating_hours(get_place_db(slug))})
+
+    @app.put("/api/<slug>/admin/operating-hours")
+    @place_admin_required
+    def place_operating_hours_set(slug):
+        d = request.get_json(silent=True) or {}
+        items = reservation_service.set_operating_hours(get_place_db(slug), d.get("operating_hours"))
+        return jsonify({"ok": True, "operating_hours": items})
+
+    @app.get("/api/<slug>/admin/closures")
+    @place_admin_required
+    def place_closures_list(slug):
+        return jsonify({"closures": reservation_service.list_closures(get_place_db(slug))})
+
+    @app.post("/api/<slug>/admin/closures")
+    @place_admin_required
+    def place_closures_add(slug):
+        d = request.get_json(silent=True) or {}
+        reservation_service.add_closure(get_place_db(slug), d.get("date"), d.get("reason", ""))
+        return jsonify({"ok": True}), 201
+
+    @app.delete("/api/<slug>/admin/closures/<int:closure_id>")
+    @place_admin_required
+    def place_closures_delete(slug, closure_id):
+        return jsonify(reservation_service.delete_closure(get_place_db(slug), closure_id))
+
+    @app.get("/api/<slug>/admin/recurring-blocks")
+    @place_admin_required
+    def place_blocks_list(slug):
+        return jsonify({"blocks": reservation_service.list_recurring_blocks(get_place_db(slug))})
+
+    @app.post("/api/<slug>/admin/recurring-blocks")
+    @place_admin_required
+    def place_blocks_add(slug):
+        reservation_service.add_recurring_block(get_place_db(slug), request.get_json(silent=True) or {})
+        return jsonify({"ok": True}), 201
+
+    @app.delete("/api/<slug>/admin/recurring-blocks/<int:block_id>")
+    @place_admin_required
+    def place_blocks_delete(slug, block_id):
+        return jsonify(reservation_service.delete_recurring_block(get_place_db(slug), block_id))
+
     # ---------------- 관리자 — 시설 관리 ----------------
     @app.get("/api/<slug>/admin/facilities")
     @place_admin_required
@@ -388,6 +445,32 @@ def _register_place(app):
     def place_admin_facility_delete(slug, facility_id):
         facility_service.delete_facility(get_place_db(slug), facility_id)
         return jsonify({"ok": True, "message": "시설이 삭제되었습니다."})
+
+    @app.post("/api/<slug>/admin/facilities/<int:facility_id>/image")
+    @place_admin_required
+    def place_admin_facility_image(slug, facility_id):
+        """시설 이미지 업로드(multipart, field=image). 기존 이미지는 삭제 후 교체."""
+        conn = get_place_db(slug)
+        fac = facility_service.get_facility(conn, facility_id)
+        if fac is None:
+            raise ApiError("시설을 찾을 수 없습니다.", 404)
+        file = request.files.get("image")
+        if not file or not file.filename:
+            raise ApiError("이미지 파일을 선택해주세요.")
+        url = image_service.save_facility_image(slug, facility_id, file, old_url=fac.get("image_url"))
+        facility_service.set_image_url(conn, facility_id, url)
+        return jsonify({"ok": True, "image_url": url})
+
+    @app.delete("/api/<slug>/admin/facilities/<int:facility_id>/image")
+    @place_admin_required
+    def place_admin_facility_image_delete(slug, facility_id):
+        conn = get_place_db(slug)
+        fac = facility_service.get_facility(conn, facility_id)
+        if fac is None:
+            raise ApiError("시설을 찾을 수 없습니다.", 404)
+        image_service.delete_image_file(fac.get("image_url"))
+        facility_service.set_image_url(conn, facility_id, None)
+        return jsonify({"ok": True})
 
 
 app = create_app()

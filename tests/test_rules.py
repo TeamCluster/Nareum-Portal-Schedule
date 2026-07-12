@@ -9,35 +9,40 @@ from services import reservation_service as rs
 
 
 class TestResolveHours:
+    # resolve_hours(selected_hours, open_hour, close_hour, max_hours=None)
     def test_single(self):
-        assert rs.resolve_hours([10]) == (10, 11)
+        assert rs.resolve_hours([10], 9, 18) == (10, 11)
 
     def test_contiguous(self):
-        assert rs.resolve_hours([10, 11, 12]) == (10, 13)
+        assert rs.resolve_hours([10, 11, 12], 9, 18) == (10, 13)
 
     def test_unsorted(self):
-        assert rs.resolve_hours([12, 10, 11]) == (10, 13)
+        assert rs.resolve_hours([12, 10, 11], 9, 18) == (10, 13)
 
     def test_empty(self):
         with pytest.raises(ApiError, match="하나 이상"):
-            rs.resolve_hours([])
+            rs.resolve_hours([], 9, 18)
 
     def test_non_contiguous(self):
         with pytest.raises(ApiError, match="연속된"):
-            rs.resolve_hours([10, 12])
+            rs.resolve_hours([10, 12], 9, 18)
 
     def test_max_hours(self):
         with pytest.raises(ApiError, match="최대 2시간"):
-            rs.resolve_hours([10, 11, 12], max_hours=2)
+            rs.resolve_hours([10, 11, 12], 9, 18, max_hours=2)
 
     def test_operating_hours(self):
         with pytest.raises(ApiError, match="운영 시간"):
-            rs.resolve_hours([8])
+            rs.resolve_hours([8], 9, 18)
         with pytest.raises(ApiError, match="운영 시간"):
-            rs.resolve_hours([18])
+            rs.resolve_hours([18], 9, 18)
+
+    def test_extended_close_allows_19(self):
+        # 운영 종료가 20시면 19시 예약 가능
+        assert rs.resolve_hours([19], 9, 20) == (19, 20)
 
     def test_last_hour(self):
-        assert rs.resolve_hours([17]) == (17, 18)
+        assert rs.resolve_hours([17], 9, 18) == (17, 18)
 
 
 class TestParticipants:

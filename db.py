@@ -93,6 +93,34 @@ CREATE TABLE IF NOT EXISTS reservations (
 CREATE INDEX IF NOT EXISTS idx_resv_facility ON reservations(facility_id);
 CREATE INDEX IF NOT EXISTS idx_resv_start    ON reservations(start_time);
 CREATE INDEX IF NOT EXISTS idx_resv_access   ON reservations(access_id);
+
+-- 요일별 운영시간 (weekday: 0=월 ~ 6=일). 7행 고정, init 시 기본값 시딩.
+CREATE TABLE IF NOT EXISTS operating_hours (
+    weekday    INTEGER PRIMARY KEY,        -- 0..6 (Mon..Sun)
+    is_open    INTEGER NOT NULL DEFAULT 1,
+    open_hour  INTEGER NOT NULL DEFAULT 9,
+    close_hour INTEGER NOT NULL DEFAULT 18
+);
+
+-- 휴무일 (행사/공휴일 등 특정 날짜 차단)
+CREATE TABLE IF NOT EXISTS closures (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    date   TEXT NOT NULL UNIQUE,           -- YYYY-MM-DD
+    reason TEXT DEFAULT ''
+);
+
+-- 정기 고정활동 (매주 반복, 시설별 점유 → 대관 겹침 방지)
+CREATE TABLE IF NOT EXISTS recurring_blocks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    facility_id INTEGER NOT NULL REFERENCES facilities(id) ON DELETE CASCADE,
+    weekday     INTEGER NOT NULL,          -- 0..6 (Mon..Sun)
+    start_hour  INTEGER NOT NULL,
+    end_hour    INTEGER NOT NULL,
+    title       TEXT DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_block_facility ON recurring_blocks(facility_id);
+CREATE INDEX IF NOT EXISTS idx_block_weekday  ON recurring_blocks(weekday);
 """
 
 
@@ -217,14 +245,18 @@ def _seed_default_place(super_conn: sqlite3.Connection) -> None:
     init_place_db(slug)
     pconn = _connect(place_db_path(slug))
     try:
-        for f in config.DEFAULT_FACILITIES:
-            pconn.execute(
-                "INSERT INTO facilities (name, type, capacity, description, image_url, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (f["name"], f["type"], f.get("capacity"), f.get("description"),
-                 f.get("image_url"), now),
-            )
-        pconn.commit()
+        # 멱등: 기관 DB 파일이 보존되어 이미 시설이 있으면 재삽입하지 않음
+        # (슈퍼 DB 만 초기화된 경우 중복 시딩 방지).
+        existing = pconn.execute("SELECT COUNT(*) AS c FROM facilities").fetchone()["c"]
+        if existing == 0:
+            for f in config.DEFAULT_FACILITIES:
+                pconn.execute(
+                    "INSERT INTO facilities (name, type, capacity, description, image_url, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (f["name"], f["type"], f.get("capacity"), f.get("description"),
+                     f.get("image_url"), now),
+                )
+            pconn.commit()
     finally:
         pconn.close()
 
@@ -249,10 +281,19 @@ def _print_initial_password_banner(password: str) -> None:
 
 
 def init_place_db(slug: str) -> None:
-    """기관 추가 시 해당 기관의 DB 파일 + 스키마를 생성 (멱등)."""
+    """기관 추가 시 해당 기관의 DB 파일 + 스키마를 생성 (멱등).
+
+    운영시간 7행(요일별) 기본값도 멱등하게 시딩(기본: 매일 09~18 운영).
+    """
     conn = _connect(place_db_path(slug))
     try:
         conn.executescript(PLACE_SCHEMA)
+        for wd in range(7):
+            conn.execute(
+                "INSERT OR IGNORE INTO operating_hours (weekday, is_open, open_hour, close_hour)"
+                " VALUES (?, 1, ?, ?)",
+                (wd, config.OPEN_HOUR, config.CLOSE_HOUR),
+            )
         conn.commit()
     finally:
         conn.close()

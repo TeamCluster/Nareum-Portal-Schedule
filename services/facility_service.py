@@ -5,6 +5,7 @@
 """
 from datetime import datetime
 
+from . import image_service
 from .errors import ApiError
 
 MAX_NAME_LENGTH = 100
@@ -94,10 +95,19 @@ def update_facility(conn, facility_id, data):
     return get_facility(conn, facility_id)
 
 
+def set_image_url(conn, facility_id, image_url):
+    """업로드된 이미지 URL 을 시설에 반영."""
+    conn.execute("UPDATE facilities SET image_url = ? WHERE id = ?", (image_url, facility_id))
+    conn.commit()
+    return get_facility(conn, facility_id)
+
+
 def delete_facility(conn, facility_id):
-    if get_facility(conn, facility_id) is None:
+    fac = get_facility(conn, facility_id)
+    if fac is None:
         raise ApiError("시설을 찾을 수 없습니다.", 404)
-    # 예약이 있으면 FK CASCADE 로 함께 삭제됨. 운영상 확인이 필요하면 라우트에서 안내.
+    # 업로드 이미지가 있으면 파일도 정리(용량 관리). 예약은 FK CASCADE 로 삭제됨.
+    image_service.delete_image_file(fac.get("image_url"))
     conn.execute("DELETE FROM facilities WHERE id = ?", (facility_id,))
     conn.commit()
     return True

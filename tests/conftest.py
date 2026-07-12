@@ -15,6 +15,7 @@ import pytest
 # --- app 임포트 전에 환경을 먼저 세팅 (config 가 import 시 읽음) ------------
 _TMP_DB = tempfile.mkdtemp(prefix="spacelog-test-")
 os.environ["DB_FOLDER"] = _TMP_DB
+os.environ["STATIC_ROOT"] = tempfile.mkdtemp(prefix="spacelog-static-")
 os.environ["SUPER_PASSWORD"] = "super-test"
 os.environ["DEFAULT_PLACE_PASSWORD"] = "place-test"
 os.environ["BOOKING_MIN_DAYS"] = "2"
