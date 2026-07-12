@@ -27,6 +27,7 @@ from config import is_valid_slug
 from db import get_place_db, get_super_db
 from services import (
     facility_service,
+    holiday_service,
     image_service,
     place_service,
     reservation_service,
@@ -192,6 +193,25 @@ def _register_super(app):
         d = request.get_json(silent=True) or {}
         ok, msg = place_service.update_place_password(slug, d.get("new_password", ""))
         return jsonify({"ok": ok, "message": msg}), (200 if ok else 400)
+
+    # --- 공통 휴무일/공휴일 (전 기관 공유) ---
+    @app.get("/api/super/holidays")
+    @super_required
+    def super_holidays_list():
+        return jsonify({"holidays": holiday_service.list_common_holidays()})
+
+    @app.post("/api/super/holidays")
+    @super_required
+    def super_holidays_add():
+        d = request.get_json(silent=True) or {}
+        holiday_service.add_common_holiday(
+            d.get("date"), d.get("name", ""), d.get("type", "holiday"))
+        return jsonify({"ok": True}), 201
+
+    @app.delete("/api/super/holidays/<int:holiday_id>")
+    @super_required
+    def super_holidays_delete(holiday_id):
+        return jsonify(holiday_service.delete_common_holiday(holiday_id))
 
 
 # ======================================================================
@@ -397,6 +417,12 @@ def _register_place(app):
         items = reservation_service.set_operating_hours(get_place_db(slug), d.get("operating_hours"))
         return jsonify({"ok": True, "operating_hours": items})
 
+    # 휴무일/공휴일: 공통(슈퍼) + 기관 지정 + 제외 + 공휴일 운영 설정
+    @app.get("/api/<slug>/admin/holidays")
+    @place_admin_required
+    def place_holidays_view(slug):
+        return jsonify(reservation_service.org_holidays_view(get_place_db(slug)))
+
     @app.get("/api/<slug>/admin/closures")
     @place_admin_required
     def place_closures_list(slug):
@@ -406,13 +432,33 @@ def _register_place(app):
     @place_admin_required
     def place_closures_add(slug):
         d = request.get_json(silent=True) or {}
-        reservation_service.add_closure(get_place_db(slug), d.get("date"), d.get("reason", ""))
+        reservation_service.add_closure(
+            get_place_db(slug), d.get("date"),
+            d.get("name", d.get("reason", "")), d.get("type", "closure"))
         return jsonify({"ok": True}), 201
 
     @app.delete("/api/<slug>/admin/closures/<int:closure_id>")
     @place_admin_required
     def place_closures_delete(slug, closure_id):
         return jsonify(reservation_service.delete_closure(get_place_db(slug), closure_id))
+
+    @app.post("/api/<slug>/admin/holiday-excludes")
+    @place_admin_required
+    def place_holiday_exclude(slug):
+        d = request.get_json(silent=True) or {}
+        return jsonify(reservation_service.add_exclude(get_place_db(slug), d.get("date")))
+
+    @app.delete("/api/<slug>/admin/holiday-excludes/<date_str>")
+    @place_admin_required
+    def place_holiday_include(slug, date_str):
+        return jsonify(reservation_service.delete_exclude(get_place_db(slug), date_str))
+
+    @app.put("/api/<slug>/admin/holiday-setting")
+    @place_admin_required
+    def place_holiday_setting(slug):
+        d = request.get_json(silent=True) or {}
+        return jsonify(reservation_service.set_holiday_operates(
+            get_place_db(slug), bool(d.get("holiday_operates"))))
 
     @app.get("/api/<slug>/admin/recurring-blocks")
     @place_admin_required

@@ -11,7 +11,7 @@ import uuid
 from datetime import date, datetime, time, timedelta
 
 import config
-from . import facility_service
+from . import facility_service, holiday_service
 from .errors import ApiError
 
 ISO = "%Y-%m-%dT%H:%M:%S"
@@ -101,24 +101,30 @@ def set_operating_hours(conn, items):
     return get_operating_hours(conn)
 
 
+VALID_CLOSURE_TYPES = ("closure", "holiday")
+
+
 def list_closures(conn):
+    """기관 지정 휴무일/공휴일 목록 (type 포함)."""
     rows = conn.execute(
-        "SELECT id, date, reason FROM closures ORDER BY date"
+        "SELECT id, date, reason, type FROM closures ORDER BY date"
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def add_closure(conn, date_str, reason=""):
+def add_closure(conn, date_str, name="", type_="closure"):
     target = parse_date(date_str)
+    if type_ not in VALID_CLOSURE_TYPES:
+        raise ApiError("유형이 올바르지 않습니다. (closure/holiday)")
     try:
         conn.execute(
-            "INSERT INTO closures (date, reason) VALUES (?, ?)",
-            (target.isoformat(), (reason or "").strip()),
+            "INSERT INTO closures (date, reason, type) VALUES (?, ?, ?)",
+            (target.isoformat(), (name or "").strip(), type_),
         )
         conn.commit()
     except Exception:
         conn.rollback()
-        raise ApiError("이미 등록된 휴무일입니다.")
+        raise ApiError("이미 등록된 날짜입니다.")
     return {"ok": True}
 
 
@@ -130,10 +136,61 @@ def delete_closure(conn, closure_id):
     return {"ok": True}
 
 
-def day_config(conn, target_date):
-    """해당 날짜의 운영 상태. {weekday, is_open, open_hour, close_hour, closed_reason}.
+# --- 공통(슈퍼) 휴무일 제외 / 공휴일 운영 설정 -----------------------------
+def add_exclude(conn, date_str):
+    """슈퍼 공통 휴무일을 이 기관에서 제외(별도 관리)."""
+    target = parse_date(date_str)
+    conn.execute("INSERT OR IGNORE INTO holiday_excludes (date) VALUES (?)", (target.isoformat(),))
+    conn.commit()
+    return {"ok": True}
 
-    is_open=False 이면 예약 불가(정기휴무 또는 휴무일 지정).
+
+def delete_exclude(conn, date_str):
+    """제외 해제(공통 휴무일 다시 적용)."""
+    target = parse_date(date_str)
+    conn.execute("DELETE FROM holiday_excludes WHERE date = ?", (target.isoformat(),))
+    conn.commit()
+    return {"ok": True}
+
+
+def get_holiday_operates(conn):
+    row = conn.execute(
+        "SELECT value FROM place_settings WHERE key = 'holiday_operates'"
+    ).fetchone()
+    return bool(row and row["value"] == "1")
+
+
+def set_holiday_operates(conn, value):
+    conn.execute(
+        "INSERT INTO place_settings (key, value) VALUES ('holiday_operates', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        ("1" if value else "0",),
+    )
+    conn.commit()
+    return {"ok": True, "holiday_operates": bool(value)}
+
+
+def org_holidays_view(conn):
+    """관리자 UI용: 공휴일 운영 설정 + 공통(제외여부) + 기관 지정 목록."""
+    excludes = {r["date"] for r in conn.execute("SELECT date FROM holiday_excludes").fetchall()}
+    common = [{**h, "excluded": h["date"] in excludes}
+              for h in holiday_service.list_common_holidays()]
+    return {
+        "holiday_operates": get_holiday_operates(conn),
+        "common": common,
+        "place": list_closures(conn),
+    }
+
+
+def day_config(conn, target_date):
+    """해당 날짜의 운영 상태.
+
+    반환: {weekday, is_open, open_hour, close_hour, closed_reason, note}
+    규칙:
+      - 휴무일(type=closure): 무조건 휴무.
+      - 공휴일(type=holiday): holiday_operates 이면 일요일(주말) 운영시간 적용, 아니면 휴무.
+      - 그 외: 요일별 운영시간(정기휴무면 휴무).
+    공통(슈퍼) 휴무일도 반영하되, 이 기관에서 제외(holiday_excludes)한 날짜는 무시.
     """
     wd = target_date.weekday()
     row = conn.execute(
@@ -142,19 +199,48 @@ def day_config(conn, target_date):
     reg_open = bool(row["is_open"]) if row else True
     open_hour = row["open_hour"] if row else config.OPEN_HOUR
     close_hour = row["close_hour"] if row else config.CLOSE_HOUR
+    date_iso = target_date.isoformat()
 
-    closure = conn.execute(
-        "SELECT reason FROM closures WHERE date = ?", (target_date.isoformat(),)
-    ).fetchone()
+    def result(is_open, oh, ch, reason, note=""):
+        return {"weekday": wd, "is_open": is_open, "open_hour": oh,
+                "close_hour": ch, "closed_reason": reason, "note": note}
 
-    if closure is not None:
-        return {"weekday": wd, "is_open": False, "open_hour": open_hour,
-                "close_hour": close_hour, "closed_reason": closure["reason"] or "휴무일"}
+    # 유효 휴무/공휴일: 기관 지정 + (제외되지 않은) 공통.
+    entries = []
+    for c in conn.execute(
+        "SELECT reason AS name, type FROM closures WHERE date = ?", (date_iso,)
+    ).fetchall():
+        entries.append({"name": c["name"], "type": c["type"] or "closure"})
+    excluded = conn.execute(
+        "SELECT 1 FROM holiday_excludes WHERE date = ?", (date_iso,)
+    ).fetchone() is not None
+    if not excluded:
+        for h in holiday_service.common_holidays_on(date_iso):
+            entries.append({"name": h["name"], "type": h["type"] or "holiday"})
+
+    # 휴무일(closure) 우선 — 무조건 휴무.
+    closure = next((e for e in entries if e["type"] == "closure"), None)
+    if closure:
+        return result(False, open_hour, close_hour, closure["name"] or "휴무일")
+
+    # 공휴일(holiday).
+    holiday = next((e for e in entries if e["type"] == "holiday"), None)
+    if holiday:
+        name = holiday["name"] or "공휴일"
+        if not get_holiday_operates(conn):
+            return result(False, open_hour, close_hour, name)
+        sun = conn.execute(
+            "SELECT is_open, open_hour, close_hour FROM operating_hours WHERE weekday = 6"
+        ).fetchone()
+        if sun and not sun["is_open"]:
+            return result(False, open_hour, close_hour, f"{name} (일요일 휴무)")
+        soh = sun["open_hour"] if sun else config.OPEN_HOUR
+        sch = sun["close_hour"] if sun else config.CLOSE_HOUR
+        return result(True, soh, sch, "", note=f"공휴일: {name} (주말 운영시간 적용)")
+
     if not reg_open:
-        return {"weekday": wd, "is_open": False, "open_hour": open_hour,
-                "close_hour": close_hour, "closed_reason": "정기 휴무일"}
-    return {"weekday": wd, "is_open": True, "open_hour": open_hour,
-            "close_hour": close_hour, "closed_reason": ""}
+        return result(False, open_hour, close_hour, "정기 휴무일")
+    return result(True, open_hour, close_hour, "")
 
 
 # ----------------------------------------------------------------------
@@ -354,6 +440,7 @@ def availability(conn, date_str):
         "is_reservable": True,
         "is_open": True,
         "closed_reason": "",
+        "note": "",
         "open_hour": config.OPEN_HOUR,
         "close_hour": config.CLOSE_HOUR,
         "facilities": [],
@@ -372,6 +459,7 @@ def availability(conn, date_str):
     payload["close_hour"] = cfg["close_hour"]
     payload["is_open"] = cfg["is_open"]
     payload["closed_reason"] = cfg["closed_reason"]
+    payload["note"] = cfg.get("note", "")
 
     if target_date < min_date or target_date > max_date or not cfg["is_open"]:
         payload["is_reservable"] = False

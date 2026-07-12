@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- 공통 휴무일/공휴일 (전 기관 공유). 슈퍼 관리자가 관리.
+--   type='closure' 휴무일(완전 휴무) / type='holiday' 공휴일(기관 설정에 따라 운영)
+CREATE TABLE IF NOT EXISTS common_holidays (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    date  TEXT NOT NULL UNIQUE,        -- YYYY-MM-DD
+    name  TEXT DEFAULT '',
+    type  TEXT NOT NULL DEFAULT 'holiday'
+);
 """
 
 PLACE_SCHEMA = """
@@ -102,11 +111,23 @@ CREATE TABLE IF NOT EXISTS operating_hours (
     close_hour INTEGER NOT NULL DEFAULT 18
 );
 
--- 휴무일 (행사/공휴일 등 특정 날짜 차단)
+-- 기관별 휴무일/공휴일 (특정 날짜). type='closure'|'holiday'.
 CREATE TABLE IF NOT EXISTS closures (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     date   TEXT NOT NULL UNIQUE,           -- YYYY-MM-DD
-    reason TEXT DEFAULT ''
+    reason TEXT DEFAULT '',
+    type   TEXT NOT NULL DEFAULT 'closure'
+);
+
+-- 슈퍼 공통 휴무일을 이 기관에서 제외(별도 관리)한 날짜.
+CREATE TABLE IF NOT EXISTS holiday_excludes (
+    date TEXT PRIMARY KEY                  -- YYYY-MM-DD
+);
+
+-- 기관 설정 key-value (holiday_operates 등).
+CREATE TABLE IF NOT EXISTS place_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 -- 정기 고정활동 (매주 반복, 시설별 점유 → 대관 겹침 방지)
@@ -288,12 +309,20 @@ def init_place_db(slug: str) -> None:
     conn = _connect(place_db_path(slug))
     try:
         conn.executescript(PLACE_SCHEMA)
+        # 레거시 마이그레이션: closures 에 type 컬럼이 없으면 추가.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(closures)").fetchall()}
+        if "type" not in cols:
+            conn.execute("ALTER TABLE closures ADD COLUMN type TEXT NOT NULL DEFAULT 'closure'")
         for wd in range(7):
             conn.execute(
                 "INSERT OR IGNORE INTO operating_hours (weekday, is_open, open_hour, close_hour)"
                 " VALUES (?, 1, ?, ?)",
                 (wd, config.OPEN_HOUR, config.CLOSE_HOUR),
             )
+        # 기본 설정: 공휴일에는 휴무(0). 기관이 운영으로 바꾸면 일요일 운영시간 적용.
+        conn.execute(
+            "INSERT OR IGNORE INTO place_settings (key, value) VALUES ('holiday_operates', '0')"
+        )
         conn.commit()
     finally:
         conn.close()
