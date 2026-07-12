@@ -213,6 +213,13 @@ def _register_super(app):
     def super_holidays_delete(holiday_id):
         return jsonify(holiday_service.delete_common_holiday(holiday_id))
 
+    @app.post("/api/super/holidays/sync")
+    @super_required
+    def super_holidays_sync():
+        """해당 연도 한국 공휴일 자동 채우기(대체공휴일 포함)."""
+        d = request.get_json(silent=True) or {}
+        return jsonify(holiday_service.sync_korea_holidays(d.get("year")))
+
 
 # ======================================================================
 #  기관 (공개 + 관리자)

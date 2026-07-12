@@ -63,10 +63,11 @@ CREATE TABLE IF NOT EXISTS app_settings (
 -- 공통 휴무일/공휴일 (전 기관 공유). 슈퍼 관리자가 관리.
 --   type='closure' 휴무일(완전 휴무) / type='holiday' 공휴일(기관 설정에 따라 운영)
 CREATE TABLE IF NOT EXISTS common_holidays (
-    id    INTEGER PRIMARY KEY AUTOINCREMENT,
-    date  TEXT NOT NULL UNIQUE,        -- YYYY-MM-DD
-    name  TEXT DEFAULT '',
-    type  TEXT NOT NULL DEFAULT 'holiday'
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    date   TEXT NOT NULL UNIQUE,        -- YYYY-MM-DD
+    name   TEXT DEFAULT '',
+    type   TEXT NOT NULL DEFAULT 'holiday',
+    source TEXT NOT NULL DEFAULT 'manual'   -- 'manual' | 'auto'(한국 공휴일 동기화)
 );
 """
 
@@ -199,6 +200,10 @@ def init_super_db() -> None:
     try:
         conn.executescript(SUPER_SCHEMA)
         _migrate_places_contact_columns(conn)
+        # common_holidays 에 source 컬럼이 없으면 추가(레거시).
+        ch_cols = {r[1] for r in conn.execute("PRAGMA table_info(common_holidays)").fetchall()}
+        if "source" not in ch_cols:
+            conn.execute("ALTER TABLE common_holidays ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
 
         # 1) 슈퍼 비밀번호가 없으면 임시값 생성 + 콘솔 출력
         row = conn.execute("SELECT id FROM super_admin WHERE id = 1").fetchone()

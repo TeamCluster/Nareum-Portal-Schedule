@@ -32,6 +32,42 @@ class TestSuperCommonHolidays:
         assert client.get("/api/super/holidays").status_code == 401
 
 
+class TestKoreaHolidaySync:
+    def test_sync_fills_year(self, super_client):
+        r = super_client.post("/api/super/holidays/sync", json={"year": 2026})
+        assert r.status_code == 200
+        body = r.get_json()
+        assert body["ok"] and body["year"] == 2026 and body["count"] > 10
+        hs = super_client.get("/api/super/holidays").get_json()["holidays"]
+        y2026 = [h for h in hs if h["date"].startswith("2026")]
+        # 신정 포함, 전부 auto, 대체공휴일 포함
+        assert any(h["date"] == "2026-01-01" for h in y2026)
+        assert all(h["source"] == "auto" for h in y2026)
+        assert any("대체" in h["name"] for h in y2026)
+
+    def test_resync_is_idempotent(self, super_client):
+        super_client.post("/api/super/holidays/sync", json={"year": 2026})
+        n1 = len(super_client.get("/api/super/holidays").get_json()["holidays"])
+        super_client.post("/api/super/holidays/sync", json={"year": 2026})
+        n2 = len(super_client.get("/api/super/holidays").get_json()["holidays"])
+        assert n1 == n2  # 중복 누적 없음
+
+    def test_sync_preserves_manual(self, super_client):
+        # 수동으로 특정 날짜(공휴일과 무관) 추가
+        super_client.post("/api/super/holidays",
+                          json={"date": "2026-01-02", "name": "임시휴관", "type": "closure"})
+        super_client.post("/api/super/holidays/sync", json={"year": 2026})
+        hs = super_client.get("/api/super/holidays").get_json()["holidays"]
+        manual = next(h for h in hs if h["date"] == "2026-01-02")
+        assert manual["source"] == "manual" and manual["type"] == "closure"
+
+    def test_invalid_year(self, super_client):
+        assert super_client.post("/api/super/holidays/sync", json={"year": "x"}).status_code == 400
+
+    def test_guard(self, client):
+        assert client.post("/api/super/holidays/sync", json={"year": 2026}).status_code == 401
+
+
 class TestCommonHolidayAppliesToOrg:
     def test_closure_type_closes_org(self, super_client, admin_client, client):
         d = date_with_weekday(2).isoformat()

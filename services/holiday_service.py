@@ -9,6 +9,7 @@ DB: super.sqlite3 의 common_holidays (date, name, type).
 from datetime import datetime
 
 from db import get_super_db
+from . import korea_holidays
 from .errors import ApiError
 
 VALID_TYPES = ("closure", "holiday")
@@ -23,7 +24,7 @@ def _parse_date(date_str):
 
 def list_common_holidays():
     rows = get_super_db().execute(
-        "SELECT id, date, name, type FROM common_holidays ORDER BY date"
+        "SELECT id, date, name, type, source FROM common_holidays ORDER BY date"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -35,7 +36,7 @@ def add_common_holiday(date_str, name="", type_="holiday"):
     db = get_super_db()
     try:
         db.execute(
-            "INSERT INTO common_holidays (date, name, type) VALUES (?, ?, ?)",
+            "INSERT INTO common_holidays (date, name, type, source) VALUES (?, ?, ?, 'manual')",
             (target.isoformat(), (name or "").strip(), type_),
         )
         db.commit()
@@ -52,6 +53,40 @@ def delete_common_holiday(holiday_id):
     if cur.rowcount == 0:
         raise ApiError("공통 휴무일을 찾을 수 없습니다.", 404)
     return {"ok": True}
+
+
+def sync_korea_holidays(year):
+    """해당 연도의 한국 공휴일을 자동 채운다(대체공휴일 포함).
+
+    같은 연도의 기존 'auto' 항목을 먼저 지우고 최신 공휴일을 다시 넣어,
+    공휴일 폐지/변경/대체공휴일 추가 등을 반영. 수동('manual') 항목과
+    같은 날짜는 보존(INSERT OR IGNORE).
+    반환: {ok, year, count(공식 공휴일 수), added(신규 반영 수)}.
+    """
+    try:
+        y = int(year)
+    except (ValueError, TypeError):
+        raise ApiError("연도가 올바르지 않습니다.")
+    if not (2000 <= y <= 2100):
+        raise ApiError("연도는 2000~2100 사이여야 합니다.")
+
+    try:
+        official = korea_holidays.fetch_korea_holidays(y)
+    except Exception as err:  # noqa: BLE001
+        raise ApiError(f"공휴일 데이터를 불러오지 못했습니다: {err}")
+
+    db = get_super_db()
+    db.execute("DELETE FROM common_holidays WHERE source = 'auto' AND date LIKE ?", (f"{y}-%",))
+    added = 0
+    for h in official:
+        cur = db.execute(
+            "INSERT OR IGNORE INTO common_holidays (date, name, type, source)"
+            " VALUES (?, ?, 'holiday', 'auto')",
+            (h["date"], h["name"]),
+        )
+        added += cur.rowcount
+    db.commit()
+    return {"ok": True, "year": y, "count": len(official), "added": added}
 
 
 def common_holidays_on(date_iso):
