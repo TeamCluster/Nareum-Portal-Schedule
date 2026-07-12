@@ -120,6 +120,27 @@ class TestRecurringBlocks:
         assert admin_client.delete(f"{BASE}/admin/recurring-blocks/{bid}").status_code == 200
         assert admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"] == []
 
+    def test_reservation_takes_priority_over_block_in_grid(self, admin_client):
+        """예약이 정기활동 시간대를 덮으면 그리드에서 예약이 우선 표시된다."""
+        wd = 2
+        wed = date_with_weekday(wd).isoformat()
+        # 정기활동 10~14
+        admin_client.post(f"{BASE}/admin/recurring-blocks",
+                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 14, "title": "정기"})
+        # 관리자 직접 추가로 그 사이 11~12 예약(정기활동 무시)
+        r = admin_client.post(f"{BASE}/admin/reservations",
+                              json=reservation_payload(date=wed, facility_id=1, hours=[11]))
+        assert r.status_code == 201
+        grid = admin_client.get(f"{BASE}/admin/day-grid?date={wed}").get_json()
+        fac = next(f for f in grid["facilities"] if f["id"] == 1)
+        segs = fac["segments"]
+        res_segs = [s for s in segs if s["type"] == "res"]
+        block_segs = [s for s in segs if s["type"] == "block"]
+        # 예약 세그먼트가 11~12 로 정확히 보임
+        assert len(res_segs) == 1 and res_segs[0]["from_hour"] == 11 and res_segs[0]["to_hour"] == 12
+        # 정기활동은 예약 앞뒤로 쪼개져 보임(10~11, 12~14)
+        assert {(s["from_hour"], s["to_hour"]) for s in block_segs} == {(10, 11), (12, 14)}
+
     def test_day_grid_shows_block(self, admin_client):
         wd = 2
         wed = date_with_weekday(wd).isoformat()

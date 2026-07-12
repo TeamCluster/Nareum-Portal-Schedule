@@ -645,33 +645,37 @@ def day_grid(conn, date_str=None):
 
     facilities = []
     for f in facilities_meta:
-        items = list(occ.get(f["id"], []))
-        for b in _blocks_for(conn, f["id"], target.weekday()):
-            items.append({"type": "block", "start_hour": b["start_hour"],
-                          "end_hour": b["end_hour"], "title": b["title"] or "정기활동"})
-        items.sort(key=lambda x: x["start_hour"])
+        # 시간 단위 점유를 만든다. 정기활동을 먼저 채우고 예약으로 덮어써서
+        # 겹치는 구간에서 예약(임의 예약건)이 우선하여 보이도록 한다.
+        cell = {}  # hour -> {"key":..., "type":..., ...}
+        for i, b in enumerate(_blocks_for(conn, f["id"], target.weekday())):
+            for h in range(max(b["start_hour"], open_h), min(b["end_hour"], close_h)):
+                cell[h] = {"key": f"blk-{i}", "type": "block", "title": b["title"] or "정기활동"}
+        for r in occ.get(f["id"], []):
+            for h in range(max(r["start_hour"], open_h), min(r["end_hour"], close_h)):
+                cell[h] = {"key": f"res-{r['res_id']}", "type": "res", "res_id": r["res_id"],
+                           "status": r["status"], "name": r["name"], "contact": r["contact"]}
 
-        segments, h, idx = [], open_h, 0
+        # 같은 점유(동일 key) 연속 구간을 하나의 세그먼트로 병합, 빈 구간은 free.
+        segments, h = [], open_h
         while h < close_h:
-            if idx < len(items) and items[idx]["start_hour"] <= h:
-                seg = items[idx]
-                idx += 1
-                end = min(seg["end_hour"], close_h)
-                if end <= h:
-                    continue
-                out = {"type": seg["type"], "from_hour": h, "to_hour": end}
-                if seg["type"] == "res":
-                    out.update({"res_id": seg["res_id"], "status": seg["status"],
-                                "name": seg["name"], "contact": seg["contact"]})
-                else:
-                    out["title"] = seg["title"]
-                segments.append(out)
-                h = end
+            here = cell.get(h)
+            if here is None:
+                start = h
+                while h < close_h and cell.get(h) is None:
+                    h += 1
+                segments.append({"type": "free", "from_hour": start, "to_hour": h})
             else:
-                next_start = items[idx]["start_hour"] if idx < len(items) else close_h
-                end = min(max(next_start, h + 1), close_h)
-                segments.append({"type": "free", "from_hour": h, "to_hour": end})
-                h = end
+                start = h
+                while h < close_h and cell.get(h) is not None and cell[h]["key"] == here["key"]:
+                    h += 1
+                seg = {"type": here["type"], "from_hour": start, "to_hour": h}
+                if here["type"] == "res":
+                    seg.update({"res_id": here["res_id"], "status": here["status"],
+                                "name": here["name"], "contact": here["contact"]})
+                else:
+                    seg["title"] = here["title"]
+                segments.append(seg)
         facilities.append({"id": f["id"], "name": f["name"], "type": f["type"],
                            "segments": segments})
 
