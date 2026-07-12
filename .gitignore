@@ -65,6 +65,10 @@ db.sqlite3-journal
 instance/
 .webassets-cache
 
+# 멀티테넌트 런타임 SQLite (슈퍼 + 기관별 DB)
+db/*.sqlite3
+db/*.sqlite3-journal
+
 # Scrapy stuff:
 .scrapy
 

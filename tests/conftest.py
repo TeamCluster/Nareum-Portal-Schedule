@@ -1,49 +1,48 @@
-"""Shared pytest fixtures.
+"""Pytest 공용 픽스처 (멀티테넌트).
 
-Uses an in-memory SQLite database (StaticPool so every connection shares the
-same in-memory DB) and a widened booking window so date-based rules are easy to
-exercise without depending on the current calendar date.
+격리: DB_FOLDER 환경변수를 임시 폴더로 지정한 뒤 app 을 임포트한다. 각 테스트
+전에 임시 폴더의 SQLite 를 모두 지우고 db.init_super_db() 로 다시 부트스트랩하여
+슈퍼/기본 기관(nareum, 시설 5종)을 새로 만든다.
+
+예약 규칙은 넓은 예약창(MIN=2, MAX=60)으로 설정해 날짜 의존 테스트를 쉽게 한다.
 """
-
+import os
+import tempfile
 from datetime import date, timedelta
 
 import pytest
-from sqlalchemy.pool import StaticPool
 
-from app import create_app
-from config import Config
-from models import db, Facility
+# --- app 임포트 전에 환경을 먼저 세팅 (config 가 import 시 읽음) ------------
+_TMP_DB = tempfile.mkdtemp(prefix="spacelog-test-")
+os.environ["DB_FOLDER"] = _TMP_DB
+os.environ["SUPER_PASSWORD"] = "super-test"
+os.environ["DEFAULT_PLACE_PASSWORD"] = "place-test"
+os.environ["BOOKING_MIN_DAYS"] = "2"
+os.environ["BOOKING_MAX_DAYS"] = "60"
+os.environ["QUIET_BOOTSTRAP"] = "1"
+
+import config  # noqa: E402
+import db as db_module  # noqa: E402
+from app import app as flask_app  # noqa: E402
+
+SLUG = config.DEFAULT_PLACE_SLUG  # "nareum"
+SUPER_PW = "super-test"
+PLACE_PW = "place-test"
 
 
-class TestConfig(Config):
-    TESTING = True
-    SECRET_KEY = "test-secret"
-    MANAGE_PASSWORD = "test-pass"
-    SQLALCHEMY_DATABASE_URI = "sqlite://"  # in-memory
-    SQLALCHEMY_ENGINE_OPTIONS = {
-        "connect_args": {"check_same_thread": False},
-        "poolclass": StaticPool,
-    }
-    # Wide window so "next Monday" style dates always fall inside it.
-    BOOKING_MIN_DAYS = 2
-    BOOKING_MAX_DAYS = 60
+def _wipe_and_bootstrap():
+    for f in os.listdir(_TMP_DB):
+        try:
+            os.remove(os.path.join(_TMP_DB, f))
+        except OSError:
+            pass
+    db_module.init_super_db()
 
 
 @pytest.fixture
 def app():
-    app = create_app(TestConfig)
-    with app.app_context():
-        db.create_all()
-        db.session.add_all(
-            [
-                Facility(id=1, name="연습터", type="연습실", description="연습 공간"),
-                Facility(id=2, name="활동터", type="활동실", description="활동 공간"),
-            ]
-        )
-        db.session.commit()
-        yield app
-        db.session.remove()
-        db.drop_all()
+    _wipe_and_bootstrap()
+    return flask_app
 
 
 @pytest.fixture
@@ -52,18 +51,22 @@ def client(app):
 
 
 @pytest.fixture
-def admin_client(app):
-    """A test client with an authenticated admin session."""
+def super_client(app):
     c = app.test_client()
-    res = c.post("/api/admin/login", json={"password": "test-pass"})
-    assert res.status_code == 200
+    assert c.post("/api/super/login", json={"password": SUPER_PW}).status_code == 200
     return c
 
 
-# ── Date helpers (relative to today, inside the test booking window) ──────────
+@pytest.fixture
+def admin_client(app):
+    """기본 기관(nareum) 관리자로 로그인된 클라이언트."""
+    c = app.test_client()
+    assert c.post(f"/api/{SLUG}/admin/login", json={"password": PLACE_PW}).status_code == 200
+    return c
 
+
+# ── 날짜 헬퍼 (예약창 내부) ────────────────────────────────────────────────
 def valid_date():
-    """A date safely inside the booking window."""
     return (date.today() + timedelta(days=3)).isoformat()
 
 
@@ -76,7 +79,6 @@ def too_far_date():
 
 
 def week_days():
-    """Three distinct dates (Mon/Tue/Wed) within one Mon–Sun week, inside the window."""
     base = date.today() + timedelta(days=2)
     monday = base + timedelta(days=(7 - base.weekday()) % 7)
     return [

@@ -1,74 +1,63 @@
 # 인수인계 문서 — 백엔드 (Nareum-Portal-Schedule)
 
-> 나름청소년활동센터 대관 예약 시스템의 **Flask REST API** 백엔드.
-> 이 문서는 프로젝트를 이어받는 개발자를 위한 배경·설계 결정·주의사항 정리입니다.
+> 대관 예약 시스템의 **Flask JSON API** 백엔드. **멀티테넌트**(기관별 DB 분리) 구조.
 > 실행/엔드포인트 요약은 [README.md](README.md) 참고.
 
-## 1. 프로젝트 개요
-- 청소년활동센터의 활동실 5곳을 온라인으로 대관 신청/승인 관리하는 시스템.
-- **사용자 흐름**: 날짜 선택 → 시설별 예약 현황 확인 → 대관 신청(승인 대기) → 관리자 승인 시 확정 → 사용자 예약 조회/취소.
-- **관리자 흐름**: 로그인 → 대시보드(승인 대기·일자별 현황·주간 캘린더) → 승인/거절, 직접 추가, 수정.
+## 1. 개요 & 역할 구조
+3계층으로 구성됩니다.
+- **슈퍼 관리자**: 기관(place)을 추가·삭제하고 기관별 관리자 비밀번호를 관리. 슈퍼 비밀번호는 단일.
+- **기관 관리자**: 자기 기관의 시설·예약을 상세 관리(승인/거절/직접추가/수정, 시설 CRUD). 기관마다 독립 비밀번호.
+- **예약 신청자(공개)**: 로그인 없이 이름+연락처로 예약 신청 후 조회/취소.
 
 ## 2. 리팩토링 배경 (무엇이 바뀌었나)
-기존에는 **Flask + Jinja 템플릿 + 바닐라 JS**로 된 단일 애플리케이션이었으나,
-백엔드(API)와 프론트엔드(React SPA)를 분리했습니다.
+원래 단일 기관(SQLAlchemy 단일 DB)이었으나, 여러 기관이 한 서비스에서 각자 운영하도록 **멀티테넌트로 전환**했습니다. 참고 프로젝트 `2026ClubLog`(슈퍼/기관 분리, 기관별 sqlite)의 설계를 그대로 계승했습니다.
 
 | 항목 | 변경 전 | 변경 후 |
 |---|---|---|
-| 응답 | Jinja `render_template` (HTML) | 전부 JSON REST API |
-| 라우팅 | `app.py` 한 파일에 전 라우트 | `create_app()` 팩토리 + `api/public.py`·`api/admin.py` 블루프린트 |
-| 검증 로직 | 각 뷰에 중복 산재 | `api/helpers.py`로 공통화 |
-| 관리자 접근 | `@app.before_request` 경로 검사 | `@admin_required` 데코레이터 (401 반환) |
-| 화면 | `templates/`, `static/js·css` | **삭제** (프론트엔드 저장소로 이동) |
-| 프론트 연동 | 없음(서버 렌더링) | CORS + 세션 쿠키(credentials) |
+| 데이터 계층 | Flask-SQLAlchemy ORM, 단일 DB | 순수 `sqlite3`, **기관별 DB 파일 분리** |
+| 기관 개념 | 없음(단일) | `super.sqlite3` 의 places + 기관별 `<slug>.sqlite3` |
+| 인증 | 단일 비밀번호(`manage_logged_in`) | 슈퍼(`super_logged_in`) + 기관별(`place_admins[slug]`), werkzeug 해시 |
+| URL | `/api/*`, `/api/admin/*` | `/api/super/*`, `/api/<slug>/*`, `/api/<slug>/admin/*` |
+| 비번/시크릿 | `.env` 평문 | DB 저장(해시) + 첫 실행 자동 생성 |
 
-제거된 것: `templates/` 전체, `static/js/`, `static/css/`.
-유지된 것: `static/img/`(시설 이미지 — 프론트가 절대경로로 참조), `models/`.
+제거됨: `models/`, `api/`(구 blueprint), Flask-SQLAlchemy 의존.
+추가됨: `db.py`, `services/`, slug 기반 라우팅.
 
 ## 3. 아키텍처 & 설계 결정
-- **App factory 패턴**: `create_app(config_class)` — 테스트/배포 시 설정 주입 용이. `app = create_app()` 전역 인스턴스는 WSGI 진입점.
-- **설정은 전부 환경변수**: [config.py](config.py) `Config` 클래스. `.env`(로컬) 또는 실제 환경변수로 오버라이드. `.env.example` 참고.
-- **DB는 SQLite 기본, 교체 가능**: `DATABASE_URL`만 바꾸면 Postgres 등으로 전환. 단, 모델의 `db.JSON` 컬럼(`participant_info`, `requested_equipment`)은 Postgres에서 `JSONB`로 자연스럽게 매핑되지만 SQLite에선 텍스트로 저장됨(동작엔 지장 없음).
-- **인증은 세션 쿠키**: `MANAGE_PASSWORD` 단일 비밀번호 → `session['manage_logged_in']=True`. 사용자 계정 개념은 없음(원본 그대로). 프론트는 `credentials: include`로 쿠키 전송.
-- **에러 처리 일원화**: 도메인 로직에서 `ApiError(message, status)`를 raise → `app.errorhandler(ApiError)`가 `{"error": message}` + 상태코드로 변환. 프론트는 이 `error` 필드를 사용자에게 그대로 노출.
+- **DB-per-tenant**: 기관마다 `db/<slug>.sqlite3`. 완전 격리(한 기관 데이터가 다른 기관에 절대 노출 안 됨). 슈퍼 레지스트리는 `db/super.sqlite3`.
+- **요청 내 멀티 커넥션**: `db.get_super_db()` / `db.get_place_db(slug)` 가 `flask.g.dbs` 에 커넥션을 캐싱, `teardown` 에서 일괄 close.
+- **자체 부트스트랩**: `db.init_super_db()` 가 첫 실행 시 슈퍼 임시 비번(콘솔 1회 출력)·`SECRET_KEY`·기본 기관(`nareum`+시설5)을 생성. `.env` 없이 동작.
+- **얇은 라우트 + 서비스 계층**: 검증/규칙은 `services/*` 에, 라우트(app.py)는 위임만. 실패는 `ApiError` raise → 전역 핸들러가 `{"error": msg}`+status.
+- **slug 안전성**: `config.is_valid_slug` — 소문자 시작 2~30자, 예약어(super/api/admin/static/public/manage) 차단. URL 경로 + DB 파일명에 함께 쓰이므로 필수.
 
-## 4. 예약 도메인 규칙 (핵심 — [api/helpers.py](api/helpers.py))
-> 규칙을 바꾸려면 대부분 helpers.py와 config.py만 손대면 됩니다.
+## 4. 인증/세션 (app.py 데코레이터)
+- `super_required` — `session["super_logged_in"]` 확인.
+- `place_required` — slug 유효+존재 확인(공개 라우트), `g.place` 에 기관정보 주입.
+- `place_admin_required` — 위 + `session["place_admins"][slug]` 로그인 확인.
+- 세션의 `place_admins` 는 dict 라 내부 변경 후 `session.modified=True` 필요.
 
-- **예약 가능 기간**: 오늘+`BOOKING_MIN_DAYS`(기본 3) ~ 오늘+`BOOKING_MAX_DAYS`(기본 14). `booking_window()`.
-- **운영 시간**: `OPEN_HOUR=9` ~ `CLOSE_HOUR=18` (예약 시작 시각 09~17시).
-- **연속 시간만**: `resolve_hours()`가 정렬 후 `end-start == len` 검사.
-- **공개 신청 제한**: 최대 2시간(`MAX_HOURS_PUBLIC`), 같은 이름+연락처로 하루 1회, 주간(월~일) 최대 2회(`WEEKLY_LIMIT`), 참가 인원 총합 ≥ 1.
-- **관리자 직접 추가/수정**: 위 공개 제한 없음(0명 허용, 2시간 초과 허용). 단 시설/시간 **중복(overlap)만** 차단.
-- **활성 상태**: `ACTIVE_STATUSES = ["confirmed","pending"]` — 이 상태만 슬롯을 점유. 중복/현황 계산은 모두 이 기준.
-- **soft delete**: 취소/거절은 삭제하지 않고 `is_deleted=True` + status 변경. 목록/조회는 `is_deleted==False` 필터. `reject_reason`에 거절 사유 저장.
+## 5. 예약 도메인 규칙 (services/reservation_service.py)
+기존 규칙을 raw SQL 로 이식(상수는 config.py):
+- 예약창 오늘+3~+14, 운영 09~18시, 연속시간만.
+- 공개: 최대 2시간, 하루 1회, 주간(월~일) 최대 2회, 인원 ≥ 1.
+- 관리자 직접추가/수정: 공개 제한 없음, 시설/시간 중복만 차단.
+- `ACTIVE_STATUSES=(confirmed,pending)` 만 슬롯 점유. 취소/거절은 soft delete.
+- 시간은 ISO 문자열(`YYYY-MM-DDTHH:MM:SS`)로 저장 → 문자열 범위 비교로 날짜 필터.
 
-## 5. 데이터 모델 ([models/__init__.py](models/__init__.py))
-- `Facility`: 시설. `type`에 "연습"이 포함되면 프론트에서 장비 선택 UI 노출.
-- `Reservation`: 예약. `access_id`(UUID)는 완료 페이지 공개 조회용 키. `participant_info`(dict), `requested_equipment`(list)는 JSON 컬럼.
-- `to_dict()`로 직렬화. `Reservation.to_dict(include_facility=True)`는 중첩 시설 정보 포함.
+## 6. 기관 삭제 정책 (옵션 B)
+`place_service.delete_place` 는 places 행만 지우고 `db/<slug>.sqlite3` **파일은 보존**. 같은 slug 로 재추가하면 예약 데이터가 그대로 복구됩니다.
 
-## 6. 마이그레이션 & 시딩 ([app.py](app.py) `init_db`)
-- `python app.py` 실행 시 `init_db(app)` 호출 → `db.create_all()` + 레거시 컬럼 추가(`access_id`, `is_deleted`, `reject_reason`) idempotent 실행 + `access_id` 백필 + 시설 5개 시딩(비어 있을 때만).
-- **주의**: 정식 마이그레이션 도구(Alembic/Flask-Migrate)는 없음. 스키마 변경 시 `init_db`의 `ALTER TABLE` 블록에 추가하거나, 규모가 커지면 Flask-Migrate 도입 권장.
-- DB 파일은 `instance/resv.db`에 생성됨(Flask instance 폴더). 초기화하려면 이 파일 삭제 후 재실행.
-
-## 7. 배포 시 반드시 바꿀 것 ⚠️
-1. **`SECRET_KEY`** — 기본값 `dev-secret-change-me`. 세션 위조 방지를 위해 랜덤 문자열 필수.
-2. **`MANAGE_PASSWORD`** — 기본값 `manage123`. 관리자 비밀번호.
-3. **`CORS_ORIGINS`** — 프론트 실제 도메인으로 설정.
-4. **쿠키 설정** — 프론트가 다른 도메인(cross-site)이면 `SESSION_COOKIE_SAMESITE=None`, `SESSION_COOKIE_SECURE=true`(HTTPS 필수). 같은 도메인/리버스프록시면 기본 `Lax`로 충분.
-5. **WSGI 서버** — `app.run(debug=True)`는 개발용. 운영은 gunicorn/waitress 등으로 `app:app` 서빙.
+## 7. 테스트
+`tests/` — 70 케이스. `DB_FOLDER` 를 임시폴더로 지정해 각 테스트마다 wipe+bootstrap. 도메인 규칙 단위 + 슈퍼/기관공개/기관관리자 통합 + **테넌트 격리** 검증 포함. `pytest.ini` 의 `-s` 는 app.py 의 stdout 재설정과 pytest 캡처 충돌 회피용.
 
 ## 8. 알려진 한계 / 향후 과제 (TODO)
-- [ ] 관리자 인증이 단일 비밀번호 → 실 운영 시 사용자별 계정/역할 고려.
-- [ ] 정식 DB 마이그레이션(Flask-Migrate) 미도입.
-- [ ] 예약 신청 시 서버 측 rate limiting/reCAPTCHA 없음(무분별 신청 방지 필요 시 추가).
-- [ ] 이메일/문자 알림(승인·거절 시) 없음.
-- [x] 자동화 테스트 — `tests/`에 `pytest` 스위트 추가(helpers 규칙 + 공개/관리자 API, 53 케이스). `pip install -r requirements-dev.txt && pytest`.
-- [ ] `overlap`/`same_day`/`weekly` 검사에 트랜잭션 잠금이 없어 동시 요청 시 극단적으로 이중 예약 가능(현재 트래픽 규모에선 사실상 무해).
+- [ ] 기관/슈퍼 모두 단일 비밀번호(계정·역할 개념 없음).
+- [ ] 정식 마이그레이션 도구 없음(스키마 변경은 db.py 의 `_migrate_*` 에 ALTER 추가).
+- [ ] 예약 동시성 락 없음(현 트래픽 규모에선 무해).
+- [ ] 이메일/문자 알림 없음.
+- [ ] 시설 이미지 업로드 기능 없음(경로 문자열만 입력). `static/img/` 는 기본 기관 이미지 공용.
 
 ## 9. 프론트엔드와의 계약
-- 프론트 저장소: `../Nareum-Portal-Schedule-FE` (그쪽 [HANDOVER.md] 참고).
-- 개발 시 프론트는 Vite 프록시로 `/api`·`/static`을 이 백엔드(:5000)로 전달 → same-origin으로 세션 쿠키 동작.
-- **API 응답 형태를 바꾸면** 프론트 `src/api/types.ts`도 함께 수정해야 함(타입 계약).
+- 프론트는 `src/api/types.ts` 가 계약. 응답 형태 변경 시 동기화 필요.
+- 프론트는 URL 의 `:slug` 를 읽어 `/api/<slug>/...` 를 호출(`src/hooks/useOrg.ts`), 슈퍼는 `/api/super/...`.
+- 개발 시 Vite 프록시로 `/api`·`/static` → :5000 (same-origin 세션 쿠키).

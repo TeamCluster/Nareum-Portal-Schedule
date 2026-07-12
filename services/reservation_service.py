@@ -1,0 +1,498 @@
+"""예약(reservations) 도메인 — 기관 DB(db/<slug>.sqlite3).
+
+기존 SQLAlchemy 기반 helpers/public/admin 로직을 raw sqlite3 로 이식.
+모든 함수는 기관 커넥션(db.get_place_db(slug))을 받는다. 검증 실패는
+ApiError 를 raise 하고, 라우트의 전역 핸들러가 {"error": msg}+status 로 변환.
+
+예약 상태 상수/운영시간/제한은 config 에 모여 있다.
+"""
+import json
+import uuid
+from datetime import date, datetime, time, timedelta
+
+import config
+from . import facility_service
+from .errors import ApiError
+
+ISO = "%Y-%m-%dT%H:%M:%S"
+
+
+# ----------------------------------------------------------------------
+# 날짜/시간 헬퍼
+# ----------------------------------------------------------------------
+def booking_window(today=None):
+    today = today or date.today()
+    return (today + timedelta(days=config.BOOKING_MIN_DAYS),
+            today + timedelta(days=config.BOOKING_MAX_DAYS))
+
+
+def parse_date(date_str):
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise ApiError("날짜 형식이 올바르지 않습니다.")
+
+
+def _day_bounds_iso(target_date):
+    """해당 날짜 [00:00, 다음날 00:00) 을 ISO 문자열로 (문자열 비교용)."""
+    start = datetime.combine(target_date, time.min).strftime(ISO)
+    end = datetime.combine(target_date + timedelta(days=1), time.min).strftime(ISO)
+    return start, end
+
+
+def _hours_to_iso(target_date, start_hour, end_hour):
+    start = datetime.combine(target_date, time(hour=start_hour)).strftime(ISO)
+    end_dt = datetime.combine(target_date, time.min) + timedelta(hours=end_hour)
+    return start, end_dt.strftime(ISO)
+
+
+def _active_placeholders():
+    return ",".join("?" for _ in config.ACTIVE_STATUSES)
+
+
+def resolve_hours(selected_hours, max_hours=None):
+    """선택 시간 리스트 검증 → (start_hour, end_hour). ApiError 로 사용자 메시지."""
+    if not selected_hours:
+        raise ApiError("이용 시간을 하나 이상 선택해주세요.")
+    try:
+        hours = sorted(int(h) for h in selected_hours)
+    except (ValueError, TypeError):
+        raise ApiError("이용 시간 값이 올바르지 않습니다.")
+
+    if max_hours is not None and len(hours) > max_hours:
+        raise ApiError(f"예약은 하루에 최대 {max_hours}시간까지만 가능합니다.")
+
+    for h in hours:
+        if not (config.OPEN_HOUR <= h < config.CLOSE_HOUR):
+            raise ApiError(
+                f"운영 시간({config.OPEN_HOUR:02d}:00~{config.CLOSE_HOUR:02d}:00) 내에서만 예약할 수 있습니다."
+            )
+
+    start_hour, end_hour = hours[0], hours[-1] + 1
+    if end_hour - start_hour != len(hours):
+        raise ApiError("이용 시간은 연속된 시간으로만 선택 가능합니다.")
+    return start_hour, end_hour
+
+
+def parse_participants(payload):
+    keys = ["elementary", "middle", "high", "teen", "adult"]
+    result = {}
+    for k in keys:
+        try:
+            result[k] = int((payload or {}).get(k, 0) or 0)
+        except (ValueError, TypeError):
+            raise ApiError("참가 인원 값이 올바르지 않습니다.")
+    return result
+
+
+# ----------------------------------------------------------------------
+# 점유/중복 계산
+# ----------------------------------------------------------------------
+def booked_hours_for(conn, facility_id, target_date, exclude_res_id=None):
+    """해당 시설/날짜에 이미 점유된 시각(int) 집합."""
+    day_start, day_end = _day_bounds_iso(target_date)
+    sql = (
+        "SELECT start_time, end_time FROM reservations"
+        " WHERE facility_id = ? AND start_time >= ? AND start_time < ?"
+        f" AND is_deleted = 0 AND status IN ({_active_placeholders()})"
+    )
+    params = [facility_id, day_start, day_end, *config.ACTIVE_STATUSES]
+    if exclude_res_id:
+        sql += " AND id != ?"
+        params.append(exclude_res_id)
+
+    hours = set()
+    for row in conn.execute(sql, params).fetchall():
+        s = datetime.strptime(row["start_time"], ISO)
+        e = datetime.strptime(row["end_time"], ISO)
+        for h in range(s.hour, e.hour):
+            hours.add(h)
+    return hours
+
+
+def has_overlap(conn, facility_id, start_iso, end_iso, exclude_res_id=None):
+    sql = (
+        "SELECT 1 FROM reservations"
+        " WHERE facility_id = ? AND start_time < ? AND end_time > ?"
+        f" AND is_deleted = 0 AND status IN ({_active_placeholders()})"
+    )
+    params = [facility_id, end_iso, start_iso, *config.ACTIVE_STATUSES]
+    if exclude_res_id:
+        sql += " AND id != ?"
+        params.append(exclude_res_id)
+    return conn.execute(sql, params).fetchone() is not None
+
+
+# ----------------------------------------------------------------------
+# 직렬화
+# ----------------------------------------------------------------------
+def _to_dict(conn, row, include_facility=True):
+    data = {
+        "id": row["id"],
+        "access_id": row["access_id"],
+        "facility_id": row["facility_id"],
+        "applicant_name": row["applicant_name"],
+        "applicant_contact": row["applicant_contact"],
+        "applicant_school": row["applicant_school"],
+        "applicant_club": row["applicant_club"],
+        "status": row["status"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "participant_info": json.loads(row["participant_info"] or "{}"),
+        "requested_equipment": json.loads(row["requested_equipment"] or "[]"),
+        "is_deleted": bool(row["is_deleted"]),
+        "reject_reason": row["reject_reason"],
+        "created_at": row["created_at"],
+    }
+    if include_facility:
+        fac = facility_service.get_facility(conn, row["facility_id"])
+        if fac:
+            data["facility"] = fac
+    return data
+
+
+_SELECT = "SELECT * FROM reservations WHERE "
+
+
+def _fetch_one(conn, where, params, include_facility=True):
+    row = conn.execute(_SELECT + where, params).fetchone()
+    return _to_dict(conn, row, include_facility) if row else None
+
+
+# ----------------------------------------------------------------------
+# 공개 — 현황 / 생성 / 조회 / 취소
+# ----------------------------------------------------------------------
+def availability(conn, date_str):
+    min_date, max_date = booking_window()
+    payload = {
+        "min_date": min_date.isoformat(),
+        "max_date": max_date.isoformat(),
+        "selected_date": date_str,
+        "is_reservable": True,
+        "facilities": [],
+    }
+    facilities = facility_service.get_facilities(conn)
+
+    if not date_str:
+        payload["facilities"] = [
+            {**f, "hours": {}, "sold_out": False} for f in facilities
+        ]
+        return payload
+
+    target_date = parse_date(date_str)
+    if target_date < min_date or target_date > max_date:
+        payload["is_reservable"] = False
+
+    for f in facilities:
+        booked = booked_hours_for(conn, f["id"], target_date)
+        hours = {
+            str(h): ("booked" if h in booked else "available")
+            for h in range(config.OPEN_HOUR, config.CLOSE_HOUR)
+        }
+        payload["facilities"].append(
+            {**f, "hours": hours, "sold_out": "available" not in hours.values()}
+        )
+    return payload
+
+
+def create_public_reservation(conn, data):
+    facility_id = data.get("facility_id")
+    facility = facility_service.get_facility(conn, facility_id) if facility_id else None
+    if facility is None:
+        raise ApiError("존재하지 않는 시설입니다.", 404)
+
+    date_str = data.get("date")
+    if not date_str:
+        raise ApiError("예약할 날짜를 선택해주세요.")
+    target_date = parse_date(date_str)
+
+    min_date, max_date = booking_window()
+    if target_date < min_date or target_date > max_date:
+        raise ApiError(
+            f"예약은 {min_date.isoformat()} 부터 {max_date.isoformat()} 까지만 가능합니다."
+        )
+
+    name = (data.get("name") or "").strip()
+    contact = (data.get("contact") or "").strip()
+    if not name or not contact:
+        raise ApiError("신청인 이름과 연락처를 입력해주세요.")
+
+    school = (data.get("school") or "").strip() or None
+    club = (data.get("club") or "").strip() or None
+
+    participants = parse_participants(data.get("participants"))
+    if sum(participants.values()) < 1:
+        raise ApiError("참가 인원을 최소 1명 이상 입력해주세요.")
+
+    equipment = data.get("equipment") or []
+
+    start_hour, end_hour = resolve_hours(data.get("hours"), max_hours=config.MAX_HOURS_PUBLIC)
+    start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
+
+    # 같은 신청인, 같은 날: 하루 1회만.
+    day_start, day_end = _day_bounds_iso(target_date)
+    same_day = conn.execute(
+        "SELECT 1 FROM reservations WHERE applicant_name = ? AND applicant_contact = ?"
+        " AND start_time >= ? AND start_time < ? AND is_deleted = 0"
+        f" AND status IN ({_active_placeholders()})",
+        [name, contact, day_start, day_end, *config.ACTIVE_STATUSES],
+    ).fetchone()
+    if same_day:
+        raise ApiError(
+            "같은 이름과 연락처로 해당 날짜에 이미 예약된 내역이 있습니다. (하루 1회만 예약 가능)"
+        )
+
+    # 주간(월~일) 제한.
+    start_of_week = target_date - timedelta(days=target_date.weekday())
+    end_of_week = start_of_week + timedelta(days=7)
+    week_start_iso, _ = _day_bounds_iso(start_of_week)
+    week_end_iso, _ = _day_bounds_iso(end_of_week)
+    weekly_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM reservations WHERE applicant_name = ? AND applicant_contact = ?"
+        " AND start_time >= ? AND start_time < ? AND is_deleted = 0"
+        f" AND status IN ({_active_placeholders()})",
+        [name, contact, week_start_iso, week_end_iso, *config.ACTIVE_STATUSES],
+    ).fetchone()["c"]
+    if weekly_count >= config.WEEKLY_LIMIT:
+        raise ApiError(
+            f"해당 주간(월~일)에 이미 {config.WEEKLY_LIMIT}회의 예약이 존재합니다. "
+            f"일주일에 최대 {config.WEEKLY_LIMIT}회까지만 예약하실 수 있습니다."
+        )
+
+    if has_overlap(conn, facility_id, start_iso, end_iso):
+        raise ApiError("선택하신 시간에 이미 다른 예약이 진행 중입니다.")
+
+    access_id = str(uuid.uuid4())
+    now = datetime.now().strftime(ISO)
+    conn.execute(
+        "INSERT INTO reservations"
+        " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
+        "  applicant_club, status, start_time, end_time, participant_info,"
+        "  requested_equipment, is_deleted, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
+        (access_id, facility_id, name, contact, school, club, start_iso, end_iso,
+         json.dumps(participants, ensure_ascii=False),
+         json.dumps(equipment, ensure_ascii=False), now),
+    )
+    conn.commit()
+    return access_id
+
+
+def get_by_access_id(conn, access_id):
+    res = _fetch_one(conn, "access_id = ?", [access_id])
+    if res is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+    return res
+
+
+def lookup(conn, name, contact):
+    name = (name or "").strip()
+    contact = (contact or "").strip()
+    if not name or not contact:
+        raise ApiError("이름과 연락처를 입력해주세요.")
+    rows = conn.execute(
+        "SELECT * FROM reservations WHERE applicant_name = ? AND applicant_contact = ?"
+        " ORDER BY start_time DESC",
+        (name, contact),
+    ).fetchall()
+    return [_to_dict(conn, r) for r in rows]
+
+
+def cancel(conn, res_id):
+    row = conn.execute("SELECT * FROM reservations WHERE id = ?", (res_id,)).fetchone()
+    if row is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+    if row["is_deleted"] or row["status"] not in ("confirmed", "pending"):
+        raise ApiError("이미 취소되었거나 유효하지 않은 예약입니다.")
+    conn.execute(
+        "UPDATE reservations SET status = 'cancelled', is_deleted = 1 WHERE id = ?",
+        (res_id,),
+    )
+    conn.commit()
+    return {"ok": True, "message": "예약이 정상적으로 취소되었습니다."}
+
+
+# ----------------------------------------------------------------------
+# 관리자 — 목록 / 대시보드 / 생성 / 수정 / 승인 / 거절
+# ----------------------------------------------------------------------
+def get_reservation(conn, res_id):
+    res = _fetch_one(conn, "id = ?", [res_id])
+    if res is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+    return res
+
+
+def all_reservations(conn):
+    rows = conn.execute(
+        "SELECT * FROM reservations ORDER BY start_time DESC"
+    ).fetchall()
+    return [_to_dict(conn, r) for r in rows]
+
+
+def requests_list(conn):
+    rows = conn.execute(
+        "SELECT * FROM reservations WHERE status = 'pending' AND is_deleted = 0"
+        " ORDER BY start_time"
+    ).fetchall()
+    return [_to_dict(conn, r) for r in rows]
+
+
+def dashboard(conn, date_str=None):
+    try:
+        selected_date = (
+            datetime.strptime(date_str, "%Y-%m-%d").date() if date_str else date.today()
+        )
+    except (ValueError, TypeError):
+        selected_date = date.today()
+
+    pending = requests_list(conn)
+
+    day_start, day_end = _day_bounds_iso(selected_date)
+    today_rows = conn.execute(
+        "SELECT * FROM reservations WHERE start_time >= ? AND start_time < ?"
+        " AND is_deleted = 0 ORDER BY start_time",
+        (day_start, day_end),
+    ).fetchall()
+
+    # 시설명으로 그룹핑.
+    groups_map = {}
+    order = []
+    for r in today_rows:
+        fac = facility_service.get_facility(conn, r["facility_id"])
+        fname = fac["name"] if fac else "(삭제된 시설)"
+        if fname not in groups_map:
+            groups_map[fname] = []
+            order.append(fname)
+        groups_map[fname].append(_to_dict(conn, r))
+
+    groups = [{"facility_name": n, "reservations": groups_map[n]} for n in order]
+
+    return {
+        "selected_date": selected_date.isoformat(),
+        "prev_date": (selected_date - timedelta(days=1)).isoformat(),
+        "next_date": (selected_date + timedelta(days=1)).isoformat(),
+        "pending_count": len(pending),
+        "pending_preview": pending[:3],
+        "todays_groups": groups,
+    }
+
+
+def calendar_events(conn):
+    rows = conn.execute(
+        "SELECT * FROM reservations WHERE is_deleted = 0"
+    ).fetchall()
+    events = []
+    for r in rows:
+        fac = facility_service.get_facility(conn, r["facility_id"])
+        fname = fac["name"] if fac else "?"
+        events.append({
+            "id": r["id"],
+            "title": f"[{fname}] {r['applicant_name']}",
+            "start": r["start_time"],
+            "end": r["end_time"],
+            "color": "#ff9800" if r["status"] == "pending" else "#4CAF50",
+        })
+    return events
+
+
+def create_admin_reservation(conn, data):
+    """관리자 직접 추가 — 확정 상태로 생성 (0명 허용, 2시간 초과 허용). 중복만 차단."""
+    facility_id = data.get("facility_id")
+    facility = facility_service.get_facility(conn, facility_id) if facility_id else None
+    if facility is None:
+        raise ApiError("시설을 선택해주세요.")
+
+    target_date = parse_date(data.get("date"))
+    start_hour, end_hour = resolve_hours(data.get("hours"))
+    start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
+
+    if has_overlap(conn, facility_id, start_iso, end_iso):
+        raise ApiError("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
+
+    access_id = str(uuid.uuid4())
+    now = datetime.now().strftime(ISO)
+    participants = parse_participants(data.get("participants"))
+    cur = conn.execute(
+        "INSERT INTO reservations"
+        " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
+        "  applicant_club, status, start_time, end_time, participant_info,"
+        "  requested_equipment, is_deleted, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 0, ?)",
+        (access_id, facility_id,
+         (data.get("name") or "").strip(), (data.get("contact") or "").strip(),
+         (data.get("school") or "").strip() or None,
+         (data.get("club") or "").strip() or None,
+         start_iso, end_iso,
+         json.dumps(participants, ensure_ascii=False),
+         json.dumps(data.get("equipment") or [], ensure_ascii=False), now),
+    )
+    conn.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+def update_reservation(conn, res_id, data):
+    row = conn.execute("SELECT id FROM reservations WHERE id = ?", (res_id,)).fetchone()
+    if row is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+
+    facility_id = data.get("facility_id")
+    if not facility_id or facility_service.get_facility(conn, facility_id) is None:
+        raise ApiError("시설을 선택해주세요.")
+
+    target_date = parse_date(data.get("date"))
+    start_hour, end_hour = resolve_hours(data.get("hours"))
+    start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
+
+    if has_overlap(conn, facility_id, start_iso, end_iso, exclude_res_id=res_id):
+        raise ApiError("선택하신 시설/시간에 이미 등록된 다른 예약이 있어 변경할 수 없습니다.")
+
+    new_status = data.get("status")
+    if new_status not in ("pending", "confirmed", "cancelled", "rejected"):
+        raise ApiError("올바르지 않은 상태 값입니다.")
+
+    is_deleted = 1 if new_status in ("cancelled", "rejected") else 0
+    reject_reason = data.get("reject_reason", "") if new_status == "rejected" else None
+
+    conn.execute(
+        "UPDATE reservations SET facility_id = ?, start_time = ?, end_time = ?,"
+        " applicant_name = ?, applicant_contact = ?, applicant_school = ?,"
+        " applicant_club = ?, participant_info = ?, requested_equipment = ?,"
+        " status = ?, is_deleted = ?, reject_reason = ? WHERE id = ?",
+        (facility_id, start_iso, end_iso,
+         (data.get("name") or "").strip(), (data.get("contact") or "").strip(),
+         (data.get("school") or "").strip() or None,
+         (data.get("club") or "").strip() or None,
+         json.dumps(parse_participants(data.get("participants")), ensure_ascii=False),
+         json.dumps(data.get("equipment") or [], ensure_ascii=False),
+         new_status, is_deleted, reject_reason, res_id),
+    )
+    conn.commit()
+    return {"ok": True, "message": "예약 정보가 성공적으로 수정되었습니다."}
+
+
+def approve(conn, res_id):
+    row = conn.execute(
+        "SELECT applicant_name FROM reservations WHERE id = ?", (res_id,)
+    ).fetchone()
+    if row is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+    conn.execute(
+        "UPDATE reservations SET status = 'confirmed', is_deleted = 0 WHERE id = ?",
+        (res_id,),
+    )
+    conn.commit()
+    return {"ok": True, "message": f"{row['applicant_name']}님의 예약이 승인되었습니다."}
+
+
+def reject(conn, res_id, reason=None):
+    row = conn.execute(
+        "SELECT applicant_name FROM reservations WHERE id = ?", (res_id,)
+    ).fetchone()
+    if row is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+    conn.execute(
+        "UPDATE reservations SET status = 'rejected', is_deleted = 1, reject_reason = ? WHERE id = ?",
+        (reason or "관리자 직권 거절", res_id),
+    )
+    conn.commit()
+    return {"ok": True, "message": f"{row['applicant_name']}님의 예약이 거절 처리되었습니다."}
