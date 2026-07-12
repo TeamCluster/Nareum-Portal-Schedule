@@ -353,14 +353,18 @@ def _register_place(app):
     @app.get("/api/<slug>/admin/booked-times")
     @place_admin_required
     def place_admin_booked_times(slug):
+        """관리자용: 예약(reserved, 하드 차단)과 정기활동(blocked, 경고)을 구분 반환."""
         facility_id = request.args.get("facility_id", type=int)
         date_str = request.args.get("date")
         if not facility_id or not date_str:
-            return jsonify([])
+            return jsonify({"reserved": [], "blocked": []})
+        conn = get_place_db(slug)
         target_date = reservation_service.parse_date(date_str)
         exclude = request.args.get("exclude_res_id", type=int)
-        return jsonify(sorted(reservation_service.booked_hours_for(
-            get_place_db(slug), facility_id, target_date, exclude)))
+        reserved = reservation_service.booked_hours_for(
+            conn, facility_id, target_date, exclude, include_blocks=False)
+        blocked = reservation_service.block_hours_for(conn, facility_id, target_date)
+        return jsonify({"reserved": sorted(reserved), "blocked": sorted(blocked)})
 
     @app.post("/api/<slug>/admin/reservations/<int:res_id>/approve")
     @place_admin_required

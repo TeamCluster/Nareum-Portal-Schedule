@@ -131,6 +131,47 @@ class TestRecurringBlocks:
         assert len(block_segs) == 1 and block_segs[0]["from_hour"] == 14 and block_segs[0]["to_hour"] == 16
 
 
+class TestAdminBypass:
+    """관리자 직접 추가/수정은 휴무일·정기활동을 무시(경고만), 실제 중복은 차단."""
+
+    def test_add_on_closed_day_warns(self, admin_client):
+        items = default_hours()
+        items[0]["is_open"] = False  # 월 휴무
+        admin_client.put(f"{BASE}/admin/operating-hours", json={"operating_hours": items})
+        mon = date_with_weekday(0).isoformat()
+        r = admin_client.post(f"{BASE}/admin/reservations",
+                              json=reservation_payload(date=mon, hours=[10]))
+        assert r.status_code == 201
+        assert any("휴무" in w for w in r.get_json()["warnings"])
+
+    def test_add_over_block_warns(self, admin_client):
+        wd = 1
+        tue = date_with_weekday(wd).isoformat()
+        admin_client.post(f"{BASE}/admin/recurring-blocks",
+                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12})
+        r = admin_client.post(f"{BASE}/admin/reservations",
+                              json=reservation_payload(date=tue, facility_id=1, hours=[10, 11]))
+        assert r.status_code == 201
+        assert any("정기" in w for w in r.get_json()["warnings"])
+
+    def test_add_normal_no_warning(self, admin_client):
+        r = admin_client.post(f"{BASE}/admin/reservations", json=reservation_payload())
+        assert r.status_code == 201 and r.get_json()["warnings"] == []
+
+    def test_real_overlap_still_blocked(self, admin_client):
+        admin_client.post(f"{BASE}/admin/reservations", json=reservation_payload(hours=[10, 11]))
+        r = admin_client.post(f"{BASE}/admin/reservations", json=reservation_payload(hours=[11]))
+        assert r.status_code == 400
+
+    def test_admin_booked_times_splits_reserved_and_blocked(self, admin_client):
+        wd = 1
+        tue = date_with_weekday(wd).isoformat()
+        admin_client.post(f"{BASE}/admin/recurring-blocks",
+                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12})
+        d = admin_client.get(f"{BASE}/admin/booked-times?facility_id=1&date={tue}").get_json()
+        assert d["reserved"] == [] and d["blocked"] == [10, 11]
+
+
 class TestAvailabilityRange:
     def test_reflects_operating_hours(self, client, admin_client):
         items = default_hours()

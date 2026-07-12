@@ -248,8 +248,8 @@ def parse_participants(payload):
     return result
 
 
-def booked_hours_for(conn, facility_id, target_date, exclude_res_id=None):
-    """해당 시설/날짜에 점유된 시각(int) 집합 — 예약 + 정기 고정활동 포함."""
+def booked_hours_for(conn, facility_id, target_date, exclude_res_id=None, include_blocks=True):
+    """해당 시설/날짜에 점유된 시각(int) 집합 — 예약(+ 옵션: 정기 고정활동)."""
     day_start, day_end = _day_bounds_iso(target_date)
     sql = (
         "SELECT start_time, end_time FROM reservations"
@@ -267,6 +267,14 @@ def booked_hours_for(conn, facility_id, target_date, exclude_res_id=None):
         e = datetime.strptime(row["end_time"], ISO).hour
         hours.update(range(s, e))
 
+    if include_blocks:
+        hours |= block_hours_for(conn, facility_id, target_date)
+    return hours
+
+
+def block_hours_for(conn, facility_id, target_date):
+    """해당 시설/날짜(요일)의 정기 고정활동 점유 시각(int) 집합."""
+    hours = set()
     for b in _blocks_for(conn, facility_id, target_date.weekday()):
         hours.update(range(b["start_hour"], b["end_hour"]))
     return hours
@@ -680,14 +688,19 @@ def create_admin_reservation(conn, data):
 
     target_date = parse_date(data.get("date"))
     cfg = day_config(conn, target_date)
-    _guard_open(cfg)
+    # 관리자 직접 추가는 정기휴무일/정기 고정활동을 무시할 수 있음(경고만 반환).
     start_hour, end_hour = resolve_hours(data.get("hours"), cfg["open_hour"], cfg["close_hour"])
     start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
 
+    # 실제 예약 간 중복(이중 예약)은 여전히 차단.
     if has_overlap(conn, facility_id, start_iso, end_iso):
         raise ApiError("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
+
+    warnings = []
+    if not cfg["is_open"]:
+        warnings.append(f"휴무일({cfg['closed_reason']})에 예약을 추가했습니다.")
     if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
-        raise ApiError("선택하신 시간은 정기 고정활동이 있어 추가할 수 없습니다.")
+        warnings.append("정기 고정활동과 겹치는 시간에 예약을 추가했습니다.")
 
     access_id = str(uuid.uuid4())
     now = datetime.now().strftime(ISO)
@@ -707,7 +720,7 @@ def create_admin_reservation(conn, data):
          json.dumps(data.get("equipment") or [], ensure_ascii=False), now),
     )
     conn.commit()
-    return {"ok": True, "id": cur.lastrowid}
+    return {"ok": True, "id": cur.lastrowid, "warnings": warnings}
 
 
 def update_reservation(conn, res_id, data):
@@ -721,14 +734,18 @@ def update_reservation(conn, res_id, data):
 
     target_date = parse_date(data.get("date"))
     cfg = day_config(conn, target_date)
-    _guard_open(cfg)
+    # 관리자 수정도 정기휴무일/정기 고정활동을 무시할 수 있음(경고만).
     start_hour, end_hour = resolve_hours(data.get("hours"), cfg["open_hour"], cfg["close_hour"])
     start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
 
     if has_overlap(conn, facility_id, start_iso, end_iso, exclude_res_id=res_id):
         raise ApiError("선택하신 시설/시간에 이미 등록된 다른 예약이 있어 변경할 수 없습니다.")
+
+    warnings = []
+    if not cfg["is_open"]:
+        warnings.append(f"휴무일({cfg['closed_reason']})로 지정된 날짜입니다.")
     if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
-        raise ApiError("선택하신 시간은 정기 고정활동이 있어 변경할 수 없습니다.")
+        warnings.append("정기 고정활동과 겹치는 시간입니다.")
 
     new_status = data.get("status")
     if new_status not in ("pending", "confirmed", "cancelled", "rejected"):
@@ -751,7 +768,7 @@ def update_reservation(conn, res_id, data):
          new_status, is_deleted, reject_reason, res_id),
     )
     conn.commit()
-    return {"ok": True, "message": "예약 정보가 성공적으로 수정되었습니다."}
+    return {"ok": True, "message": "예약 정보가 성공적으로 수정되었습니다.", "warnings": warnings}
 
 
 def approve(conn, res_id):
