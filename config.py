@@ -69,6 +69,34 @@ CORS_ORIGINS = [
 SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
 SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
 
+
+# --- 전송 구간 보안 (HTTPS/TLS) -----------------------------------------
+# 비밀번호를 포함한 모든 통신을 암호화하기 위한 설정. 저장은 이미 pbkdf2 해시로
+# 안전하며, 여기서는 "전송 중" 노출을 막는다.
+#
+#   운영(HTTPS) 권장값:  FORCE_HTTPS=true  SESSION_COOKIE_SECURE=true
+#   개발(HTTP)  기본값:  FORCE_HTTPS=false SESSION_COOKIE_SECURE=false
+def _env_bool(name: str, default: bool) -> bool:
+    return os.environ.get(name, str(default)).strip().lower() in ("1", "true", "yes", "on")
+
+
+# HTTP 로 들어온 요청을 HTTPS 로 301 리다이렉트한다. 리버스 프록시(nginx 등)
+# 뒤에서는 X-Forwarded-Proto 헤더를 신뢰해 판단한다(아래 TRUSTED_PROXY_HOPS).
+FORCE_HTTPS = _env_bool("FORCE_HTTPS", False)
+
+# HSTS: 브라우저에게 "이 도메인은 앞으로도 HTTPS 로만 접속" 을 강제(초 단위).
+# HTTPS 로 실제 서빙될 때만 헤더를 내보낸다(HTTP 개발 중엔 자동 무시).
+# 0 이면 HSTS 미사용. 운영 안정화 후 31536000(1년) 권장.
+HSTS_MAX_AGE = int(os.environ.get("HSTS_MAX_AGE", "0"))
+HSTS_INCLUDE_SUBDOMAINS = _env_bool("HSTS_INCLUDE_SUBDOMAINS", False)
+
+# 신뢰하는 리버스 프록시 홉 수. 1 이상이면 ProxyFix 로 X-Forwarded-Proto/Host 를
+# 신뢰해 request.is_secure / Secure 쿠키가 올바로 동작. 프록시가 없으면 0.
+TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "0"))
+
+# 공통 보안 응답 헤더 on/off (기본 on — 끌 이유는 거의 없음).
+ENABLE_SECURITY_HEADERS = _env_bool("ENABLE_SECURITY_HEADERS", True)
+
 # --- 예약 도메인 규칙 (프론트와 공유되는 비즈니스 규칙) ------------------
 # 예약 가능 기간: 오늘 + MIN_DAYS ~ 오늘 + MAX_DAYS
 BOOKING_MIN_DAYS = int(os.environ.get("BOOKING_MIN_DAYS", 3))

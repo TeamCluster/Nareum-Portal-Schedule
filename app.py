@@ -18,8 +18,9 @@ import os
 import sys
 from functools import wraps
 
-from flask import Flask, g, jsonify, request, session
+from flask import Flask, g, jsonify, redirect, request, session
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
 import db
@@ -53,6 +54,10 @@ def create_app():
         SESSION_COOKIE_SECURE=config.SESSION_COOKIE_SECURE,
         SESSION_COOKIE_HTTPONLY=True,
     )
+
+    # 전송 구간 보안(HTTPS) 설정 — CORS 보다 먼저 걸어 리다이렉트가 앞서게 한다.
+    _configure_transport_security(app)
+
     CORS(app, resources={r"/api/*": {"origins": config.CORS_ORIGINS}},
          supports_credentials=True)
 
@@ -64,6 +69,53 @@ def create_app():
     _register_super(app)
     _register_place(app)
     return app
+
+
+# ======================================================================
+#  전송 구간 보안 (HTTPS / 보안 헤더)
+# ======================================================================
+def _configure_transport_security(app):
+    """비밀번호 등 전 구간을 TLS 로 보호하기 위한 설정.
+
+    저장(비밀번호)은 이미 pbkdf2 해시라 안전하며, 여기서는 "전송 중" 노출을
+    막는 세 가지를 건다:
+      1) ProxyFix   — TLS 종료 리버스 프록시 뒤에서 실제 스킴/호스트 인식
+      2) HTTPS 강제 — HTTP 요청을 301 로 HTTPS 리다이렉트 (FORCE_HTTPS)
+      3) 보안 헤더  — HSTS / X-Content-Type-Options / X-Frame-Options 등
+    """
+    # 1) 리버스 프록시 신뢰: X-Forwarded-Proto/Host 를 반영해 request.is_secure
+    #    와 Secure 쿠키가 프록시 뒤에서도 올바로 동작하게 한다.
+    if config.TRUSTED_PROXY_HOPS > 0:
+        hops = config.TRUSTED_PROXY_HOPS
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=hops, x_host=hops)
+
+    # 2) HTTP -> HTTPS 리다이렉트 (운영 스위치). 헬스체크는 프록시/모니터가
+    #    HTTP 로 두드릴 수 있으므로 예외로 둔다.
+    @app.before_request
+    def _force_https():
+        if not config.FORCE_HTTPS or request.is_secure:
+            return None
+        if request.method in ("GET", "HEAD") and request.path == "/api/health":
+            return None
+        return redirect(request.url.replace("http://", "https://", 1), code=301)
+
+    # 3) 공통 보안 응답 헤더
+    @app.after_request
+    def _security_headers(resp):
+        if not config.ENABLE_SECURITY_HEADERS:
+            return resp
+        # MIME 스니핑/클릭재킹/레퍼러 누출 방지 (스킴과 무관하게 항상)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "no-referrer")
+        # HSTS 는 실제 HTTPS 응답일 때만 — HTTP 개발 중 브라우저가 HTTPS 를
+        # 강제로 기억해버리는 사고를 막는다.
+        if config.HSTS_MAX_AGE > 0 and request.is_secure:
+            value = f"max-age={config.HSTS_MAX_AGE}"
+            if config.HSTS_INCLUDE_SUBDOMAINS:
+                value += "; includeSubDomains"
+            resp.headers.setdefault("Strict-Transport-Security", value)
+        return resp
 
 
 # ======================================================================
@@ -564,4 +616,8 @@ def _register_place(app):
 app = create_app()
 
 if __name__ == "__main__":
-    app.run(debug=True, host="127.0.0.1", port=5000)
+    # 로컬에서 HTTPS 를 테스트하려면 DEV_HTTPS=true 로 실행하면 임시 자체서명
+    # 인증서로 https://127.0.0.1:5000 서빙(브라우저 경고는 무시). 'adhoc' 은
+    # cryptography 패키지가 필요: pip install cryptography
+    ssl_context = "adhoc" if config._env_bool("DEV_HTTPS", False) else None
+    app.run(debug=True, host="127.0.0.1", port=5000, ssl_context=ssl_context)
