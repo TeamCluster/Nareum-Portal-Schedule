@@ -617,7 +617,7 @@ app = create_app()
 
 if __name__ == "__main__":
     # 로컬에서 HTTPS 를 테스트하려면 DEV_HTTPS=true 로 실행하면 임시 자체서명
-    # 인증서로 https://127.0.0.1:5000 서빙(브라우저 경고는 무시). 'adhoc' 은
+    # 인증서로 https://127.0.0.1:8000 서빙(브라우저 경고는 무시). 'adhoc' 은
     # cryptography 패키지가 필요: pip install cryptography
     ssl_context = "adhoc" if config._env_bool("DEV_HTTPS", False) else None
-    app.run(debug=True, host="127.0.0.1", port=5000, ssl_context=ssl_context)
+    app.run(debug=True, host="127.0.0.1", port=8000, ssl_context=ssl_context)

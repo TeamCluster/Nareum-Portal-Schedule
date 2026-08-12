@@ -11,7 +11,7 @@
 ## 실행
 ```bash
 pip install -r requirements.txt
-python app.py          # http://127.0.0.1:5000
+python app.py          # http://127.0.0.1:8000
 ```
 - 첫 실행 시 `db/super.sqlite3` 를 만들고 **슈퍼 임시 비밀번호를 콘솔에 1회 출력**하며, `SECRET_KEY` 를 자동 생성해 DB 에 저장합니다.
 - 기관이 하나도 없으면 **기본 기관 `nareum`**(시설 5종)을 시딩합니다(관리자 임시 비번 `manage123`).

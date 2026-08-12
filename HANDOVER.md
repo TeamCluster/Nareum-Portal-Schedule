@@ -60,4 +60,8 @@
 ## 9. 프론트엔드와의 계약
 - 프론트는 `src/api/types.ts` 가 계약. 응답 형태 변경 시 동기화 필요.
 - 프론트는 URL 의 `:slug` 를 읽어 `/api/<slug>/...` 를 호출(`src/hooks/useOrg.ts`), 슈퍼는 `/api/super/...`.
-- 개발 시 Vite 프록시로 `/api`·`/static` → :5000 (same-origin 세션 쿠키).
+- 개발 시 Vite 프록시로 `/api`·`/static` → :8000 (same-origin 세션 쿠키).
+- macOS 는 :5000 을 AirPlay 수신기가 점유해 모든 요청에 403 을 준다. 프록시 포트를
+  바꿀 일이 있어도 5000 은 피할 것.
+- `vite.config.js` 가 프론트 루트에 있으면 Vite 가 `vite.config.ts` 대신 그걸 읽는다.
+  (과거 `tsc -b` 산출물) — 보이면 지울 것.
