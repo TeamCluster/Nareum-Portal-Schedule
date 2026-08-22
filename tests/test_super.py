@@ -1,13 +1,38 @@
 """슈퍼 관리자 API 통합 테스트."""
 import io
 
-from conftest import SLUG, SUPER_PW
+from conftest import PLACE_PW, SLUG, SUPER_PW
 from test_scheduling import _PNG
 
 
 class TestSuperAuth:
     def test_login_wrong(self, client):
         assert client.post("/api/super/login", json={"password": "x"}).status_code == 401
+
+    def test_bruteforce_locks_out(self, client):
+        """임계치를 넘으면 429 로 잠기고, 이후엔 올바른 비밀번호도 통하지 않는다."""
+        import config
+        for _ in range(config.LOGIN_MAX_ATTEMPTS):
+            assert client.post("/api/super/login", json={"password": "x"}).status_code == 401
+        assert client.post("/api/super/login", json={"password": "x"}).status_code == 429
+        assert client.post("/api/super/login", json={"password": SUPER_PW}).status_code == 429
+
+    def test_success_resets_counter(self, client):
+        """성공하면 카운터가 지워져 이전 실패가 누적되지 않는다."""
+        import config
+        for _ in range(config.LOGIN_MAX_ATTEMPTS - 1):
+            client.post("/api/super/login", json={"password": "x"})
+        assert client.post("/api/super/login", json={"password": SUPER_PW}).status_code == 200
+        assert client.post("/api/super/login", json={"password": "x"}).status_code == 401
+
+    def test_place_lockout_is_independent_of_super(self, client):
+        """기관 잠금이 슈퍼 로그인을 막지 않는다(범위별로 따로 센다)."""
+        import config
+        for _ in range(config.LOGIN_MAX_ATTEMPTS):
+            client.post(f"/api/{SLUG}/admin/login", json={"password": "x"})
+        assert client.post(f"/api/{SLUG}/admin/login",
+                           json={"password": PLACE_PW}).status_code == 429
+        assert client.post("/api/super/login", json={"password": SUPER_PW}).status_code == 200
 
     def test_login_ok(self, client):
         r = client.post("/api/super/login", json={"password": SUPER_PW})

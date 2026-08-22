@@ -117,13 +117,42 @@ class TestLookupCancel:
         d = r.get_json()
         assert len(d) == 1 and d[0]["status"] == "pending"
 
+    def _own_id(self, client):
+        return client.post(f"{BASE}/reservations/lookup",
+                           json={"name": "홍길동", "contact": "010-1234-5678"}).get_json()[0]["id"]
+
     def test_cancel_frees_slot(self, client):
         self._create(client)
-        rid = client.post(f"{BASE}/reservations/lookup",
-                          json={"name": "홍길동", "contact": "010-1234-5678"}).get_json()[0]["id"]
-        assert client.post(f"{BASE}/reservations/{rid}/cancel").status_code == 200
+        rid = self._own_id(client)
+        r = client.post(f"{BASE}/reservations/{rid}/cancel",
+                        json={"name": "홍길동", "contact": "010-1234-5678"})
+        assert r.status_code == 200
         d = client.get(f"{BASE}/availability?date={valid_date()}").get_json()
         assert d["facilities"][0]["hours"]["10"] == "available"
+
+    def test_cancel_requires_owner_identity(self, client):
+        """본인 확인 없이는 취소 불가 — id 만 알아도 남의 예약을 지울 수 없어야 한다."""
+        self._create(client)
+        rid = self._own_id(client)
+        assert client.post(f"{BASE}/reservations/{rid}/cancel").status_code == 400
+        r = client.post(f"{BASE}/reservations/{rid}/cancel",
+                        json={"name": "임꺽정", "contact": "010-0000-0000"})
+        assert r.status_code == 404
+        # 예약은 그대로 유효해야 한다.
+        assert client.post(f"{BASE}/reservations/lookup",
+                           json={"name": "홍길동", "contact": "010-1234-5678"}
+                           ).get_json()[0]["status"] == "pending"
+
+    def test_cancel_id_enumeration_blocked(self, client):
+        """id 를 훑어 전체 예약을 말소하는 공격이 통하지 않아야 한다."""
+        self._create(client)
+        for probe in range(1, 20):
+            assert client.post(f"{BASE}/reservations/{probe}/cancel",
+                               json={"name": "공격자", "contact": "010-9999-9999"}
+                               ).status_code == 404
+        assert client.post(f"{BASE}/reservations/lookup",
+                           json={"name": "홍길동", "contact": "010-1234-5678"}
+                           ).get_json()[0]["status"] == "pending"
 
 
 class TestTenantIsolation:

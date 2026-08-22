@@ -20,6 +20,7 @@ from functools import wraps
 
 from flask import Flask, g, jsonify, redirect, request, session
 from flask_cors import CORS
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 import config
@@ -31,6 +32,7 @@ from services import (
     holiday_service,
     image_service,
     place_service,
+    rate_limit,
     reservation_service,
     super_service,
 )
@@ -53,6 +55,8 @@ def create_app():
         SESSION_COOKIE_SAMESITE=config.SESSION_COOKIE_SAMESITE,
         SESSION_COOKIE_SECURE=config.SESSION_COOKIE_SECURE,
         SESSION_COOKIE_HTTPONLY=True,
+        # 본문 크기 상한 — 초과하면 Werkzeug 가 파싱 전에 413 으로 끊는다.
+        MAX_CONTENT_LENGTH=config.MAX_CONTENT_LENGTH,
     )
 
     # 전송 구간 보안(HTTPS) 설정 — CORS 보다 먼저 걸어 리다이렉트가 앞서게 한다.
@@ -65,10 +69,63 @@ def create_app():
     def _handle_api_error(err):
         return jsonify({"error": err.message}), err.status
 
+    @app.errorhandler(RequestEntityTooLarge)
+    def _handle_too_large(_err):
+        """업로드 상한 초과 — 기본 HTML 대신 API 형식({"error": ...})으로 응답."""
+        mb = config.MAX_CONTENT_LENGTH // (1024 * 1024)
+        return jsonify({"error": f"요청이 너무 큽니다. ({mb}MB 이하)"}), 413
+
     _register_meta(app)
     _register_super(app)
     _register_place(app)
+    _log_storage_locations()
     return app
+
+
+def _looks_containerized():
+    """컨테이너 안에서 돌고 있는지 추정. 확실한 판정은 아니지만 경고 대상을
+    좁히는 데는 충분하다(시놀로지 NAS·VPS 직접 실행에서는 False)."""
+    if os.path.exists("/.dockerenv"):
+        return True
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as f:
+            cgroup = f.read()
+    except OSError:
+        return False
+    return any(k in cgroup for k in ("docker", "containerd", "kubepods"))
+
+
+def _log_storage_locations():
+    """데이터가 어디에 저장되는지 부팅 시 1회 출력한다.
+
+    예약 DB 와 업로드 이미지는 로컬 파일이다. 앱 디렉터리 안에 두는 것 자체는
+    문제가 아니며(NAS·VPS 에서는 오히려 자연스럽다), 위험한 조합은
+    "컨테이너 안 + 바인드 마운트 없이 앱 디렉터리" 뿐이다. 그 경우 재배포마다
+    데이터가 사라지므로 그때만 경고한다.
+    바인드 마운트를 확인했다면 STORAGE_PERSISTENT=true 로 경고를 끌 수 있다.
+    """
+    if os.environ.get("QUIET_BOOTSTRAP"):
+        return
+    print(f"[storage] DB_FOLDER   = {config.DB_FOLDER}", flush=True)
+    print(f"[storage] STATIC_ROOT = {config.STATIC_ROOT}", flush=True)
+
+    if config.STORAGE_PERSISTENT or not _looks_containerized():
+        return
+    app_dir = os.path.realpath(config.BASE_DIR) + os.sep
+    inside_app = [
+        f"{name}={path}"
+        for name, path in (("DB_FOLDER", config.DB_FOLDER),
+                           ("STATIC_ROOT", config.STATIC_ROOT))
+        if os.path.realpath(path).startswith(app_dir)
+    ]
+    if inside_app:
+        print(
+            "[storage] ⚠️  컨테이너 안에서 데이터가 앱 디렉터리에 있습니다 ("
+            + ", ".join(inside_app) + ").\n"
+            "[storage]     바인드 마운트/볼륨이 없다면 재배포 시 예약과 업로드 이미지가 사라집니다.\n"
+            "[storage]     마운트를 확인했다면 STORAGE_PERSISTENT=true 로 이 경고를 끄세요.",
+            flush=True,
+        )
 
 
 # ======================================================================
@@ -83,11 +140,16 @@ def _configure_transport_security(app):
       2) HTTPS 강제 — HTTP 요청을 301 로 HTTPS 리다이렉트 (FORCE_HTTPS)
       3) 보안 헤더  — HSTS / X-Content-Type-Options / X-Frame-Options 등
     """
-    # 1) 리버스 프록시 신뢰: X-Forwarded-Proto/Host 를 반영해 request.is_secure
-    #    와 Secure 쿠키가 프록시 뒤에서도 올바로 동작하게 한다.
+    # 1) 리버스 프록시 신뢰: X-Forwarded-* 를 반영해 request.is_secure / remote_addr
+    #    이 프록시 뒤에서도 올바로 동작하게 한다.
+    #    For 와 Proto/Host 는 홉 수가 다르다(config.TRUSTED_PROTO_HOPS 주석 참고).
     if config.TRUSTED_PROXY_HOPS > 0:
-        hops = config.TRUSTED_PROXY_HOPS
-        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=hops, x_host=hops)
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=config.TRUSTED_PROXY_HOPS,
+            x_proto=config.TRUSTED_PROTO_HOPS,
+            x_host=config.TRUSTED_HOST_HOPS,
+        )
 
     # 2) HTTP -> HTTPS 리다이렉트 (운영 스위치). 헬스체크는 프록시/모니터가
     #    HTTP 로 두드릴 수 있으므로 예외로 둔다.
@@ -121,6 +183,15 @@ def _configure_transport_security(app):
 # ======================================================================
 #  데코레이터
 # ======================================================================
+def _login_key(scope):
+    """로그인 시도 카운터 키 — 범위 + 클라이언트 IP.
+
+    프록시 뒤라면 TRUSTED_PROXY_HOPS 가 1 이상이어야 remote_addr 이 실제
+    클라이언트 IP 다(ProxyFix). 0 이면 모두가 프록시 IP 하나로 묶인다.
+    """
+    return rate_limit.client_key(scope, request.remote_addr)
+
+
 def super_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -184,9 +255,13 @@ def _register_super(app):
     @app.post("/api/super/login")
     def super_login():
         data = request.get_json(silent=True) or {}
+        key = _login_key("super")
+        rate_limit.guard(key)
         if super_service.verify_super_password(data.get("password", "")):
+            rate_limit.record_success(key)
             session["super_logged_in"] = True
             return jsonify({"ok": True})
+        rate_limit.record_failure(key)
         return jsonify({"error": "비밀번호가 올바르지 않습니다."}), 401
 
     @app.post("/api/super/logout")
@@ -306,12 +381,16 @@ def _register_place(app):
     @place_required
     def place_login(slug):
         data = request.get_json(silent=True) or {}
+        key = _login_key(f"place:{slug}")
+        rate_limit.guard(key)
         if place_service.verify_place_password(slug, data.get("password", "")):
+            rate_limit.record_success(key)
             admins = session.get("place_admins", {})
             admins[slug] = True
             session["place_admins"] = admins
             session.modified = True
             return jsonify({"ok": True})
+        rate_limit.record_failure(key)
         return jsonify({"error": "비밀번호가 올바르지 않습니다."}), 401
 
     @app.post("/api/<slug>/admin/logout")
@@ -394,7 +473,10 @@ def _register_place(app):
     @app.post("/api/<slug>/reservations/<int:res_id>/cancel")
     @place_required
     def place_cancel(slug, res_id):
-        return jsonify(reservation_service.cancel(get_place_db(slug), res_id))
+        """공개 취소 — body 의 이름+연락처가 예약과 일치해야 한다(본인 확인)."""
+        d = request.get_json(silent=True) or {}
+        return jsonify(reservation_service.cancel(
+            get_place_db(slug), res_id, d.get("name"), d.get("contact")))
 
     # ---------------- 관리자 (보호) ----------------
     @app.put("/api/<slug>/admin/info")
@@ -616,6 +698,27 @@ def _register_place(app):
 app = create_app()
 
 if __name__ == "__main__":
+    # ------------------------------------------------------------------
+    # 여기는 **개발 전용** 진입점이다. Werkzeug 개발 서버 + 디버거로 뜨므로
+    # 운영에 노출되면 디버거를 통해 임의 코드 실행이 가능하다.
+    # 운영은 반드시:  gunicorn -c gunicorn.conf.py wsgi:app
+    # ------------------------------------------------------------------
+    # 운영용 설정이 켜져 있는데 이 경로로 들어왔다면 잘못 띄운 것이므로 막는다.
+    production_signals = [
+        name for name, on in (
+            ("FORCE_HTTPS", config.FORCE_HTTPS),
+            ("SESSION_COOKIE_SECURE", config.SESSION_COOKIE_SECURE),
+            ("TRUSTED_PROXY_HOPS", config.TRUSTED_PROXY_HOPS > 0),
+            ("HSTS_MAX_AGE", config.HSTS_MAX_AGE > 0),
+        ) if on
+    ]
+    if production_signals:
+        sys.exit(
+            "운영 설정(" + ", ".join(production_signals) + ")이 켜져 있습니다.\n"
+            "개발 서버(app.py) 대신 운영 서버로 실행하세요:\n"
+            "    gunicorn -c gunicorn.conf.py wsgi:app"
+        )
+
     # 로컬에서 HTTPS 를 테스트하려면 DEV_HTTPS=true 로 실행하면 임시 자체서명
     # 인증서로 https://127.0.0.1:8000 서빙(브라우저 경고는 무시). 'adhoc' 은
     # cryptography 패키지가 필요: pip install cryptography
