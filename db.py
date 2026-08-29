@@ -17,6 +17,7 @@
       - 기관이 하나도 없으면 기본 기관(config.DEFAULT_PLACE_SLUG)을 시설과 함께 시딩
     설정 파일(.env) 없이 동작하는 구조.
 """
+import json
 import os
 import secrets
 import sqlite3
@@ -91,6 +92,9 @@ CREATE TABLE IF NOT EXISTS reservations (
     applicant_contact   TEXT    NOT NULL,
     applicant_school    TEXT,
     applicant_club      TEXT,
+    applicant_age       INTEGER,                -- 종이 서식의 '이름 (나이)'
+    applicant_address   TEXT,                   -- 종이 서식의 '주소 또는 E-Mail'
+    activity            TEXT    NOT NULL DEFAULT '',  -- 활동내용 (예: 춤연습, 밴드합주)
     status              TEXT    NOT NULL DEFAULT 'pending',
     start_time          TEXT    NOT NULL,   -- ISO8601 'YYYY-MM-DDTHH:MM:SS'
     end_time            TEXT    NOT NULL,
@@ -98,6 +102,9 @@ CREATE TABLE IF NOT EXISTS reservations (
     requested_equipment TEXT    DEFAULT '[]',  -- JSON 문자열
     is_deleted          INTEGER NOT NULL DEFAULT 0,
     reject_reason       TEXT,
+    -- 이용 결과: ''(미처리) | attended | no_show | unverified (규정 15·16 패널티 근거)
+    attendance          TEXT    NOT NULL DEFAULT '',
+    attendance_at       TEXT,
     created_at          TEXT    NOT NULL
 );
 
@@ -139,7 +146,9 @@ CREATE TABLE IF NOT EXISTS recurring_blocks (
     weekday     INTEGER NOT NULL,          -- 0..6 (Mon..Sun)
     start_hour  INTEGER NOT NULL,
     end_hour    INTEGER NOT NULL,
-    title       TEXT DEFAULT ''
+    title       TEXT DEFAULT '',
+    -- 활동 유형: club(동아리) | program(센터 프로그램) | etc(점검·외부 정기대관 등)
+    kind        TEXT NOT NULL DEFAULT 'etc'
 );
 
 CREATE INDEX IF NOT EXISTS idx_block_facility ON recurring_blocks(facility_id);
@@ -234,6 +243,11 @@ def init_super_db() -> None:
         has_place = conn.execute("SELECT 1 FROM places LIMIT 1").fetchone()
         if not has_place:
             _seed_default_place(conn)
+        else:
+            # 이미 있는 기관 DB 는 여기서만 스키마 마이그레이션 기회를 얻는다
+            # (init_place_db 는 멱등이라 매 실행 호출해도 안전).
+            for row in conn.execute("SELECT slug FROM places").fetchall():
+                init_place_db(row["slug"])
     finally:
         conn.close()
 
@@ -319,6 +333,11 @@ def init_place_db(slug: str) -> None:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(closures)").fetchall()}
         if "type" not in cols:
             conn.execute("ALTER TABLE closures ADD COLUMN type TEXT NOT NULL DEFAULT 'closure'")
+        _migrate_reservation_form_columns(conn)
+        # 레거시 마이그레이션: recurring_blocks 에 유형 컬럼이 없으면 추가.
+        blk_cols = {r[1] for r in conn.execute("PRAGMA table_info(recurring_blocks)").fetchall()}
+        if "kind" not in blk_cols:
+            conn.execute("ALTER TABLE recurring_blocks ADD COLUMN kind TEXT NOT NULL DEFAULT 'etc'")
         for wd in range(7):
             conn.execute(
                 "INSERT OR IGNORE INTO operating_hours (weekday, is_open, open_hour, close_hour)"
@@ -329,9 +348,43 @@ def init_place_db(slug: str) -> None:
         conn.execute(
             "INSERT OR IGNORE INTO place_settings (key, value) VALUES ('holiday_operates', '0')"
         )
+        _seed_form_settings(conn)
         conn.commit()
     finally:
         conn.close()
+
+
+def _migrate_reservation_form_columns(conn: sqlite3.Connection) -> None:
+    """옛 reservations 스키마에 종이 신청서 항목 컬럼이 없으면 추가 (멱등)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(reservations)").fetchall()}
+    for col, ddl in (
+        ("applicant_age", "INTEGER"),
+        ("applicant_address", "TEXT"),
+        ("activity", "TEXT NOT NULL DEFAULT ''"),
+        ("attendance", "TEXT NOT NULL DEFAULT ''"),
+        ("attendance_at", "TEXT"),
+    ):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE reservations ADD COLUMN {col} {ddl}")
+
+
+def _seed_form_settings(conn: sqlite3.Connection) -> None:
+    """신청서 설정(필요 물품 목록·공지·대관규정)과 대관 규칙 기본값을 멱등하게 시딩.
+
+    기관마다 장비와 규정이 다르므로 place_settings 에 JSON 으로 저장하고,
+    기관 관리자가 '신청서 설정' 화면에서 수정한다.
+    """
+    defaults = {
+        "equipment_catalog": config.DEFAULT_EQUIPMENT_CATALOG,
+        "form_notice": config.DEFAULT_FORM_NOTICE,
+        "form_rules": config.DEFAULT_FORM_RULES,
+        "booking_rules": config.DEFAULT_BOOKING_RULES,
+    }
+    for key, value in defaults.items():
+        conn.execute(
+            "INSERT OR IGNORE INTO place_settings (key, value) VALUES (?, ?)",
+            (key, json.dumps(value, ensure_ascii=False)),
+        )
 
 
 def place_db_exists(slug: str) -> bool:

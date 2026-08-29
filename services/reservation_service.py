@@ -6,6 +6,7 @@
 시간은 ISO 문자열('YYYY-MM-DDTHH:MM:SS')로 저장, 정수 시각(시간 단위)만 사용.
 weekday 는 월=0 ~ 일=6 (파이썬 date.weekday()).
 """
+import calendar
 import json
 import uuid
 from datetime import date, datetime, time, timedelta
@@ -20,10 +21,109 @@ ISO = "%Y-%m-%dT%H:%M:%S"
 # ----------------------------------------------------------------------
 # 날짜/시간 헬퍼
 # ----------------------------------------------------------------------
-def booking_window(today=None):
+def get_booking_rules(conn=None):
+    """기관의 대관 규칙. conn 이 없거나 값이 없으면 config 기본값.
+
+    기관마다 방침이 달라 place_settings 의 booking_rules(JSON)에 저장한다.
+    """
+    rules = dict(config.DEFAULT_BOOKING_RULES)
+    if conn is None:
+        return rules
+    row = conn.execute(
+        "SELECT value FROM place_settings WHERE key = 'booking_rules'"
+    ).fetchone()
+    if row:
+        try:
+            stored = json.loads(row["value"])
+        except (ValueError, TypeError):
+            stored = {}
+        for key in rules:
+            if isinstance(stored.get(key), int) and not isinstance(stored[key], bool):
+                rules[key] = stored[key]
+    return rules
+
+
+def set_booking_rules(conn, data):
+    """관리자 저장 — 보낸 키만 갱신하고 허용 범위를 검증한다."""
+    rules = get_booking_rules(conn)
+    data = data or {}
+    if not isinstance(data, dict):
+        raise ApiError("대관 규칙 형식이 올바르지 않습니다.")
+
+    labels = {
+        "booking_min_days": "최소 신청 기한(일)",
+        "booking_max_days": "예약 가능 범위(일)",
+        "cancel_deadline_days": "취소 마감(일)",
+        "penalty_months": "재대관 제한 기간(개월)",
+        "extension_hours": "현장 연장 가능 시간",
+    }
+    for key, (low, high) in config.BOOKING_RULE_LIMITS.items():
+        if key not in data:
+            continue
+        try:
+            value = int(data[key])
+        except (ValueError, TypeError):
+            raise ApiError(f"{labels[key]} 값이 올바르지 않습니다.")
+        if not (low <= value <= high):
+            raise ApiError(f"{labels[key]} 은(는) {low}~{high} 범위여야 합니다.")
+        rules[key] = value
+
+    if rules["booking_min_days"] > rules["booking_max_days"]:
+        raise ApiError("최소 신청 기한은 예약 가능 범위보다 클 수 없습니다.")
+
+    conn.execute(
+        "INSERT INTO place_settings (key, value) VALUES ('booking_rules', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (json.dumps(rules, ensure_ascii=False),),
+    )
+    conn.commit()
+    return rules
+
+
+def booking_window(conn=None, today=None, rules=None):
+    """예약 가능 날짜 범위 (오늘+min ~ 오늘+max). 기관 규칙을 따른다."""
+    rules = rules or get_booking_rules(conn)
     today = today or date.today()
-    return (today + timedelta(days=config.BOOKING_MIN_DAYS),
-            today + timedelta(days=config.BOOKING_MAX_DAYS))
+    return (today + timedelta(days=rules["booking_min_days"]),
+            today + timedelta(days=rules["booking_max_days"]))
+
+
+def add_months(base, months):
+    """base 로부터 months 개월 뒤 날짜 (월말 보정)."""
+    total = base.month - 1 + months
+    year = base.year + total // 12
+    month = total % 12 + 1
+    return date(year, month, min(base.day, calendar.monthrange(year, month)[1]))
+
+
+def penalty_until(conn, name, contact, rules=None):
+    """노쇼/이용확인 미실시(규정 15·16)로 인한 재대관 제한 해제일.
+
+    제한이 없으면 None. 마지막 위반 이용일 + penalty_months 가 해제일이며,
+    그 날짜부터 다시 대관할 수 있다.
+    """
+    rules = rules or get_booking_rules(conn)
+    months = rules["penalty_months"]
+    if months <= 0 or not name or not contact:
+        return None
+
+    placeholders = ",".join("?" for _ in config.PENALTY_ATTENDANCE)
+    row = conn.execute(
+        "SELECT MAX(start_time) AS last FROM reservations"
+        " WHERE applicant_name = ? AND applicant_contact = ?"
+        f" AND attendance IN ({placeholders})",
+        [name, contact, *config.PENALTY_ATTENDANCE],
+    ).fetchone()
+    if not row or not row["last"]:
+        return None
+    return add_months(datetime.strptime(row["last"], ISO).date(), months)
+
+
+def cancel_deadline(start_time_iso, rules):
+    """신청자가 직접 취소할 수 있는 마지막 날짜. 0 이면 당일까지 허용."""
+    days = rules["cancel_deadline_days"]
+    start_date = datetime.strptime(start_time_iso, ISO).date()
+    return start_date - timedelta(days=days)
 
 
 def parse_date(date_str):
@@ -248,15 +348,22 @@ def day_config(conn, target_date):
 # ----------------------------------------------------------------------
 def list_recurring_blocks(conn):
     rows = conn.execute(
-        "SELECT r.id, r.facility_id, r.weekday, r.start_hour, r.end_hour, r.title,"
+        "SELECT r.id, r.facility_id, r.weekday, r.start_hour, r.end_hour, r.title, r.kind,"
         " f.name AS facility_name"
         " FROM recurring_blocks r LEFT JOIN facilities f ON f.id = r.facility_id"
         " ORDER BY r.weekday, r.start_hour"
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [{**dict(r), "kind_label": config.RECURRING_KIND_LABELS.get(r["kind"], "기타")}
+            for r in rows]
 
 
-def add_recurring_block(conn, data):
+def _parse_recurring_block(conn, data):
+    """정기 고정활동 입력 검증 → 저장 값 튜플.
+
+    동아리 정기활동뿐 아니라 센터 프로그램·시설 점검·외부 정기대관도 들어오므로
+    유형(kind)을 함께 받는다. 활동명은 현황표에 그대로 표시되어 없으면 무슨 일정인지
+    알 수 없으므로 필수.
+    """
     facility_id = data.get("facility_id")
     if not facility_id or facility_service.get_facility(conn, facility_id) is None:
         raise ApiError("시설을 선택해주세요.")
@@ -270,11 +377,42 @@ def add_recurring_block(conn, data):
         raise ApiError("요일 값이 올바르지 않습니다.")
     if not (config.HOUR_ABS_MIN <= start_hour < end_hour <= config.HOUR_ABS_MAX):
         raise ApiError("시간 범위가 올바르지 않습니다. (시작<종료)")
-    title = (data.get("title") or "").strip()
+
+    kind = (data.get("kind") or "etc").strip()
+    if kind not in config.RECURRING_KINDS:
+        raise ApiError("활동 유형이 올바르지 않습니다. (동아리/프로그램/기타)")
+
+    title = (data.get("title") or "").strip()[:100]
+    if not title:
+        label = config.RECURRING_KIND_LABELS[kind]
+        hint = {"club": "동아리명", "program": "프로그램명"}.get(kind, "활동명")
+        raise ApiError(f"{label} 정기활동의 {hint}을(를) 입력해주세요.")
+
+    return facility_id, weekday, start_hour, end_hour, title, kind
+
+
+def add_recurring_block(conn, data):
+    values = _parse_recurring_block(conn, data)
+    cur = conn.execute(
+        "INSERT INTO recurring_blocks (facility_id, weekday, start_hour, end_hour, title, kind)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        values,
+    )
+    conn.commit()
+    return {"ok": True, "id": cur.lastrowid}
+
+
+def update_recurring_block(conn, block_id, data):
+    """등록된 정기활동 수정 — 학기마다 시간·담당이 바뀌는 경우가 잦다."""
+    if conn.execute(
+        "SELECT 1 FROM recurring_blocks WHERE id = ?", (block_id,)
+    ).fetchone() is None:
+        raise ApiError("정기활동을 찾을 수 없습니다.", 404)
+    facility_id, weekday, start_hour, end_hour, title, kind = _parse_recurring_block(conn, data)
     conn.execute(
-        "INSERT INTO recurring_blocks (facility_id, weekday, start_hour, end_hour, title)"
-        " VALUES (?, ?, ?, ?, ?)",
-        (facility_id, weekday, start_hour, end_hour, title),
+        "UPDATE recurring_blocks SET facility_id = ?, weekday = ?, start_hour = ?,"
+        " end_hour = ?, title = ?, kind = ? WHERE id = ?",
+        (facility_id, weekday, start_hour, end_hour, title, kind, block_id),
     )
     conn.commit()
     return {"ok": True}
@@ -290,7 +428,7 @@ def delete_recurring_block(conn, block_id):
 
 def _blocks_for(conn, facility_id, weekday):
     return conn.execute(
-        "SELECT start_hour, end_hour, title FROM recurring_blocks"
+        "SELECT start_hour, end_hour, title, kind FROM recurring_blocks"
         " WHERE facility_id = ? AND weekday = ? ORDER BY start_hour",
         (facility_id, weekday),
     ).fetchall()
@@ -323,15 +461,109 @@ def resolve_hours(selected_hours, open_hour, close_hour, max_hours=None):
     return start_hour, end_hour
 
 
+def _positive_int(value, message):
+    """빈값은 0. 숫자가 아니거나 음수면 ApiError."""
+    if value in (None, ""):
+        return 0
+    try:
+        num = int(value)
+    except (ValueError, TypeError):
+        raise ApiError(message)
+    if num < 0:
+        raise ApiError(message)
+    return num
+
+
 def parse_participants(payload):
-    keys = ["elementary", "middle", "high", "teen", "adult"]
+    """이용 인원을 {연령대: {male, female, unspecified}} 형태로 정규화.
+
+    종이 서식이 연령대마다 남/여를 따로 받으므로 성별까지 저장한다.
+    레거시 데이터( {"middle": 3} 처럼 성별 없이 저장된 값 )는 손실 없이
+    unspecified 버킷으로 읽어들인다 — 신규 신청은 male/female 만 채운다.
+    """
+    payload = payload or {}
+    if not isinstance(payload, dict):
+        raise ApiError("참가 인원 값이 올바르지 않습니다.")
+
     result = {}
-    for k in keys:
-        try:
-            result[k] = int((payload or {}).get(k, 0) or 0)
-        except (ValueError, TypeError):
-            raise ApiError("참가 인원 값이 올바르지 않습니다.")
+    for band in config.PARTICIPANT_BANDS:
+        raw = payload.get(band, 0)
+        if isinstance(raw, dict):
+            counts = {
+                g: _positive_int(raw.get(g), "참가 인원 값이 올바르지 않습니다.")
+                for g in config.PARTICIPANT_GENDERS
+            }
+        else:
+            # 레거시(성별 미구분) 숫자.
+            counts = {g: 0 for g in config.PARTICIPANT_GENDERS}
+            counts["unspecified"] = _positive_int(raw, "참가 인원 값이 올바르지 않습니다.")
+        result[band] = counts
     return result
+
+
+def total_participants(participants):
+    """정규화된 인원 dict 의 총합."""
+    return sum(sum(counts.values()) for counts in (participants or {}).values())
+
+
+def parse_equipment(payload):
+    """필요 물품을 [{name, qty}] 형태로 정규화.
+
+    종이 서식의 '마이크 ( )대' 처럼 수량이 필요한 항목이 있어 문자열이 아닌
+    객체로 저장한다. 레거시(문자열 배열)도 수량 1로 읽어들인다.
+    """
+    if payload in (None, ""):
+        return []
+    if not isinstance(payload, list):
+        raise ApiError("필요 물품 값이 올바르지 않습니다.")
+
+    items, seen = [], set()
+    for entry in payload:
+        if isinstance(entry, str):
+            entry = {"name": entry}
+        if not isinstance(entry, dict):
+            raise ApiError("필요 물품 값이 올바르지 않습니다.")
+        name = (entry.get("name") or "").strip()[:100]
+        if not name or name in seen:
+            continue
+        qty = _positive_int(entry.get("qty", 1), "필요 물품 수량이 올바르지 않습니다.") or 1
+        seen.add(name)
+        items.append({"name": name, "qty": qty})
+    return items
+
+
+MAX_ACTIVITY_LEN = 200
+
+
+def parse_applicant(data, require_activity=False):
+    """종이 서식의 '신청인 / 연락처 / 활동내용' 블록을 정규화.
+
+    require_activity 는 공개 신청에서만 True — 관리자 직접 추가는 활동내용을
+    나중에 채울 수 있게 비워둘 수 있다.
+    """
+    name = (data.get("name") or "").strip()
+    contact = (data.get("contact") or "").strip()
+    activity = (data.get("activity") or "").strip()
+    if len(activity) > MAX_ACTIVITY_LEN:
+        raise ApiError(f"활동내용은 {MAX_ACTIVITY_LEN}자를 넘을 수 없습니다.")
+    if require_activity and not activity:
+        raise ApiError("활동내용을 입력해주세요. (예: 춤연습, 밴드합주, 보드게임)")
+
+    age = data.get("age", data.get("applicant_age"))
+    age = _positive_int(age, "나이 값이 올바르지 않습니다.") or None
+    if age is not None and age > 120:
+        raise ApiError("나이 값이 올바르지 않습니다.")
+
+    return {
+        "name": name,
+        "contact": contact,
+        "age": age,
+        "school": (data.get("school") or "").strip() or None,
+        "club": (data.get("club") or "").strip() or None,
+        # 종이 서식의 '주소 또는 E-Mail' 칸.
+        "address": (data.get("address") or "").strip()[:200] or None,
+        "activity": activity,
+    }
 
 
 def booked_hours_for(conn, facility_id, target_date, exclude_res_id=None, include_blocks=True):
@@ -395,7 +627,14 @@ def _guard_open(cfg):
 # ----------------------------------------------------------------------
 # 직렬화
 # ----------------------------------------------------------------------
-def _to_dict(conn, row, include_facility=True):
+def _to_dict(conn, row, include_facility=True, rules=None):
+    """예약 1건 직렬화. rules 를 넘기면 목록 조회 시 규칙 재조회를 피한다."""
+    rules = rules or get_booking_rules(conn)
+    cancellable = (
+        not row["is_deleted"]
+        and row["status"] in ("pending", "confirmed")
+        and date.today() <= cancel_deadline(row["start_time"], rules)
+    )
     data = {
         "id": row["id"],
         "access_id": row["access_id"],
@@ -404,13 +643,21 @@ def _to_dict(conn, row, include_facility=True):
         "applicant_contact": row["applicant_contact"],
         "applicant_school": row["applicant_school"],
         "applicant_club": row["applicant_club"],
+        "applicant_age": row["applicant_age"],
+        "applicant_address": row["applicant_address"],
+        "activity": row["activity"] or "",
         "status": row["status"],
         "start_time": row["start_time"],
         "end_time": row["end_time"],
-        "participant_info": json.loads(row["participant_info"] or "{}"),
-        "requested_equipment": json.loads(row["requested_equipment"] or "[]"),
+        "participant_info": parse_participants(json.loads(row["participant_info"] or "{}")),
+        "requested_equipment": parse_equipment(json.loads(row["requested_equipment"] or "[]")),
         "is_deleted": bool(row["is_deleted"]),
         "reject_reason": row["reject_reason"],
+        "attendance": row["attendance"] or "",
+        "attendance_at": row["attendance_at"],
+        # 신청자가 지금 스스로 취소할 수 있는지 (규칙을 프론트에 중복 구현하지 않도록).
+        "can_cancel": cancellable,
+        "cancel_deadline": cancel_deadline(row["start_time"], rules).isoformat(),
         "created_at": row["created_at"],
     }
     if include_facility:
@@ -428,11 +675,17 @@ def _fetch_one(conn, where, params, include_facility=True):
     return _to_dict(conn, row, include_facility) if row else None
 
 
+def _to_dicts(conn, rows):
+    """여러 건 직렬화 — 규칙은 한 번만 읽는다."""
+    rules = get_booking_rules(conn)
+    return [_to_dict(conn, r, rules=rules) for r in rows]
+
+
 # ----------------------------------------------------------------------
 # 공개 — 현황 / 생성 / 조회 / 취소
 # ----------------------------------------------------------------------
 def availability(conn, date_str):
-    min_date, max_date = booking_window()
+    min_date, max_date = booking_window(conn)
     payload = {
         "min_date": min_date.isoformat(),
         "max_date": max_date.isoformat(),
@@ -490,7 +743,8 @@ def create_public_reservation(conn, data):
         raise ApiError("예약할 날짜를 선택해주세요.")
     target_date = parse_date(date_str)
 
-    min_date, max_date = booking_window()
+    rules = get_booking_rules(conn)
+    min_date, max_date = booking_window(conn, rules=rules)
     if target_date < min_date or target_date > max_date:
         raise ApiError(
             f"예약은 {min_date.isoformat()} 부터 {max_date.isoformat()} 까지만 가능합니다."
@@ -499,19 +753,25 @@ def create_public_reservation(conn, data):
     cfg = day_config(conn, target_date)
     _guard_open(cfg)
 
-    name = (data.get("name") or "").strip()
-    contact = (data.get("contact") or "").strip()
+    applicant = parse_applicant(data, require_activity=True)
+    name, contact = applicant["name"], applicant["contact"]
     if not name or not contact:
         raise ApiError("신청인 이름과 연락처를 입력해주세요.")
 
-    school = (data.get("school") or "").strip() or None
-    club = (data.get("club") or "").strip() or None
+    # 규정 15·16 — 노쇼/이용확인 미실시 이력이 있으면 제한 기간 동안 대관 불가.
+    blocked_until = penalty_until(conn, name, contact, rules)
+    if blocked_until and target_date < blocked_until:
+        raise ApiError(
+            f"취소 신청 없이 미사용하거나 이용확인을 받지 않은 이력이 있어 "
+            f"{blocked_until.isoformat()} 부터 대관하실 수 있습니다. "
+            f"(자세한 사항은 담당자에게 문의해주세요.)"
+        )
 
     participants = parse_participants(data.get("participants"))
-    if sum(participants.values()) < 1:
+    if total_participants(participants) < 1:
         raise ApiError("참가 인원을 최소 1명 이상 입력해주세요.")
 
-    equipment = data.get("equipment") or []
+    equipment = parse_equipment(data.get("equipment"))
 
     start_hour, end_hour = resolve_hours(
         data.get("hours"), cfg["open_hour"], cfg["close_hour"], max_hours=config.MAX_HOURS_PUBLIC)
@@ -557,10 +817,13 @@ def create_public_reservation(conn, data):
     conn.execute(
         "INSERT INTO reservations"
         " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
-        "  applicant_club, status, start_time, end_time, participant_info,"
+        "  applicant_club, applicant_age, applicant_address, activity, status,"
+        "  start_time, end_time, participant_info,"
         "  requested_equipment, is_deleted, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
-        (access_id, facility_id, name, contact, school, club, start_iso, end_iso,
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
+        (access_id, facility_id, name, contact, applicant["school"], applicant["club"],
+         applicant["age"], applicant["address"], applicant["activity"],
+         start_iso, end_iso,
          json.dumps(participants, ensure_ascii=False),
          json.dumps(equipment, ensure_ascii=False), now),
     )
@@ -585,15 +848,29 @@ def lookup(conn, name, contact):
         " ORDER BY start_time DESC",
         (name, contact),
     ).fetchall()
-    return [_to_dict(conn, r) for r in rows]
+    return _to_dicts(conn, rows)
 
 
 def cancel(conn, res_id):
+    """신청자 직접 취소 — 이용일 기준 취소 마감을 지나면 거절한다(규정: 대관 1일 전까지).
+
+    마감 이후 취소는 담당자가 관리자 화면에서 상태를 바꾸는 경로만 남긴다.
+    """
     row = conn.execute("SELECT * FROM reservations WHERE id = ?", (res_id,)).fetchone()
     if row is None:
         raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
     if row["is_deleted"] or row["status"] not in ("confirmed", "pending"):
         raise ApiError("이미 취소되었거나 유효하지 않은 예약입니다.")
+
+    rules = get_booking_rules(conn)
+    deadline = cancel_deadline(row["start_time"], rules)
+    if date.today() > deadline:
+        days = rules["cancel_deadline_days"]
+        raise ApiError(
+            f"이용일 {days}일 전({deadline.isoformat()})까지만 직접 취소하실 수 있습니다. "
+            f"담당자에게 문의해주세요."
+        )
+
     conn.execute(
         "UPDATE reservations SET status = 'cancelled', is_deleted = 1 WHERE id = ?",
         (res_id,),
@@ -616,7 +893,7 @@ def all_reservations(conn):
     rows = conn.execute(
         "SELECT * FROM reservations ORDER BY start_time DESC"
     ).fetchall()
-    return [_to_dict(conn, r) for r in rows]
+    return _to_dicts(conn, rows)
 
 
 def requests_list(conn):
@@ -624,7 +901,7 @@ def requests_list(conn):
         "SELECT * FROM reservations WHERE status = 'pending' AND is_deleted = 0"
         " ORDER BY start_time"
     ).fetchall()
-    return [_to_dict(conn, r) for r in rows]
+    return _to_dicts(conn, rows)
 
 
 def dashboard(conn, date_str=None):
@@ -636,6 +913,7 @@ def dashboard(conn, date_str=None):
         selected_date = date.today()
 
     pending = requests_list(conn)
+    rules = get_booking_rules(conn)
 
     day_start, day_end = _day_bounds_iso(selected_date)
     today_rows = conn.execute(
@@ -652,7 +930,7 @@ def dashboard(conn, date_str=None):
         if fname not in groups_map:
             groups_map[fname] = []
             order.append(fname)
-        groups_map[fname].append(_to_dict(conn, r))
+        groups_map[fname].append(_to_dict(conn, r, rules=rules))
 
     groups = [{"facility_name": n, "reservations": groups_map[n]} for n in order]
 
@@ -688,7 +966,7 @@ def day_grid(conn, date_str=None):
     """일자별 시설×시간 현황 매트릭스. 운영시간 범위/휴무/정기활동 반영.
 
     facility.segments: 각 항목은 {type, from_hour, to_hour, ...}
-      type='free' | 'res'(res_id,status,name,contact) | 'block'(title)
+      type='free' | 'res'(res_id,status,name,contact) | 'block'(title,kind)
     휴무일이면 is_open=False, facilities 는 시설 목록만(segments 비움).
     """
     try:
@@ -738,7 +1016,8 @@ def day_grid(conn, date_str=None):
         cell = {}  # hour -> {"key":..., "type":..., ...}
         for i, b in enumerate(_blocks_for(conn, f["id"], target.weekday())):
             for h in range(max(b["start_hour"], open_h), min(b["end_hour"], close_h)):
-                cell[h] = {"key": f"blk-{i}", "type": "block", "title": b["title"] or "정기활동"}
+                cell[h] = {"key": f"blk-{i}", "type": "block",
+                           "title": b["title"] or "정기활동", "kind": b["kind"] or "etc"}
         for r in occ.get(f["id"], []):
             for h in range(max(r["start_hour"], open_h), min(r["end_hour"], close_h)):
                 cell[h] = {"key": f"res-{r['res_id']}", "type": "res", "res_id": r["res_id"],
@@ -763,6 +1042,7 @@ def day_grid(conn, date_str=None):
                                 "name": here["name"], "contact": here["contact"]})
                 else:
                     seg["title"] = here["title"]
+                    seg["kind"] = here["kind"]
                 segments.append(seg)
         facilities.append({"id": f["id"], "name": f["name"], "type": f["type"],
                            "segments": segments})
@@ -830,19 +1110,24 @@ def create_admin_reservation(conn, data):
     access_id = str(uuid.uuid4())
     now = datetime.now().strftime(ISO)
     participants = parse_participants(data.get("participants"))
+    applicant = parse_applicant(data)
+    # 동아리 단기대관은 개인 신청인이 없다 — 이름을 비우면 동아리명을 표시명으로 쓴다
+    # (현황표/목록에서 빈칸으로 보이지 않도록).
+    if not applicant["name"] and applicant["club"]:
+        applicant["name"] = applicant["club"]
     cur = conn.execute(
         "INSERT INTO reservations"
         " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
-        "  applicant_club, status, start_time, end_time, participant_info,"
+        "  applicant_club, applicant_age, applicant_address, activity, status,"
+        "  start_time, end_time, participant_info,"
         "  requested_equipment, is_deleted, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 0, ?)",
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 0, ?)",
         (access_id, facility_id,
-         (data.get("name") or "").strip(), (data.get("contact") or "").strip(),
-         (data.get("school") or "").strip() or None,
-         (data.get("club") or "").strip() or None,
+         applicant["name"], applicant["contact"], applicant["school"], applicant["club"],
+         applicant["age"], applicant["address"], applicant["activity"],
          start_iso, end_iso,
          json.dumps(participants, ensure_ascii=False),
-         json.dumps(data.get("equipment") or [], ensure_ascii=False), now),
+         json.dumps(parse_equipment(data.get("equipment")), ensure_ascii=False), now),
     )
     conn.commit()
     return {"ok": True, "id": cur.lastrowid, "warnings": warnings}
@@ -879,21 +1164,104 @@ def update_reservation(conn, res_id, data):
     is_deleted = 1 if new_status in ("cancelled", "rejected") else 0
     reject_reason = data.get("reject_reason", "") if new_status == "rejected" else None
 
+    applicant = parse_applicant(data)
     conn.execute(
         "UPDATE reservations SET facility_id = ?, start_time = ?, end_time = ?,"
         " applicant_name = ?, applicant_contact = ?, applicant_school = ?,"
-        " applicant_club = ?, participant_info = ?, requested_equipment = ?,"
+        " applicant_club = ?, applicant_age = ?, applicant_address = ?, activity = ?,"
+        " participant_info = ?, requested_equipment = ?,"
         " status = ?, is_deleted = ?, reject_reason = ? WHERE id = ?",
         (facility_id, start_iso, end_iso,
-         (data.get("name") or "").strip(), (data.get("contact") or "").strip(),
-         (data.get("school") or "").strip() or None,
-         (data.get("club") or "").strip() or None,
+         applicant["name"], applicant["contact"], applicant["school"], applicant["club"],
+         applicant["age"], applicant["address"], applicant["activity"],
          json.dumps(parse_participants(data.get("participants")), ensure_ascii=False),
-         json.dumps(data.get("equipment") or [], ensure_ascii=False),
+         json.dumps(parse_equipment(data.get("equipment")), ensure_ascii=False),
          new_status, is_deleted, reject_reason, res_id),
     )
     conn.commit()
     return {"ok": True, "message": "예약 정보가 성공적으로 수정되었습니다.", "warnings": warnings}
+
+
+ATTENDANCE_LABELS = {
+    "": "미처리",
+    "attended": "이용확인 완료",
+    "no_show": "노쇼(미사용)",
+    "unverified": "이용확인 미실시",
+}
+
+
+def set_attendance(conn, res_id, value):
+    """이용 결과 기록 — 노쇼/이용확인 미실시는 재대관 제한(규정 15·16)으로 이어진다."""
+    if value not in config.ATTENDANCE_VALUES:
+        raise ApiError("이용 결과 값이 올바르지 않습니다.")
+
+    row = conn.execute(
+        "SELECT applicant_name, applicant_contact, start_time FROM reservations WHERE id = ?",
+        (res_id,),
+    ).fetchone()
+    if row is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+
+    conn.execute(
+        "UPDATE reservations SET attendance = ?, attendance_at = ? WHERE id = ?",
+        (value, datetime.now().strftime(ISO) if value else None, res_id),
+    )
+    conn.commit()
+
+    rules = get_booking_rules(conn)
+    blocked_until = penalty_until(conn, row["applicant_name"], row["applicant_contact"], rules)
+    message = f"{row['applicant_name']}님의 이용 결과를 '{ATTENDANCE_LABELS[value]}'(으)로 기록했습니다."
+    if value in config.PENALTY_ATTENDANCE and blocked_until:
+        message += f" {blocked_until.isoformat()} 까지 대관이 제한됩니다."
+    return {
+        "ok": True,
+        "message": message,
+        "attendance": value,
+        "blocked_until": blocked_until.isoformat() if blocked_until else None,
+    }
+
+
+def extend(conn, res_id):
+    """현장 연장 — 뒤이은 대관예약이 없을 때 종료 시각을 규칙만큼 늘린다.
+
+    운영 종료 시각·다른 예약·정기 고정활동에 걸리면 거절한다.
+    """
+    row = conn.execute("SELECT * FROM reservations WHERE id = ?", (res_id,)).fetchone()
+    if row is None:
+        raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
+    if row["is_deleted"] or row["status"] != "confirmed":
+        raise ApiError("확정된 예약만 연장할 수 있습니다.")
+
+    rules = get_booking_rules(conn)
+    hours = rules["extension_hours"]
+    if hours <= 0:
+        raise ApiError("이 기관은 현장 연장을 운영하지 않습니다.")
+
+    end_dt = datetime.strptime(row["end_time"], ISO)
+    target_date = datetime.strptime(row["start_time"], ISO).date()
+    new_end_dt = end_dt + timedelta(hours=hours)
+
+    cfg = day_config(conn, target_date)
+    if end_dt.hour + hours > cfg["close_hour"]:
+        raise ApiError(
+            f"운영 종료 시각({cfg['close_hour']:02d}:00)을 넘겨 연장할 수 없습니다."
+        )
+
+    new_end_iso = new_end_dt.strftime(ISO)
+    if has_overlap(conn, row["facility_id"], row["end_time"], new_end_iso, exclude_res_id=res_id):
+        raise ApiError("뒤이은 시간에 다른 대관예약이 있어 연장할 수 없습니다.")
+    if has_block_overlap(conn, row["facility_id"], target_date.weekday(),
+                         end_dt.hour, end_dt.hour + hours):
+        raise ApiError("뒤이은 시간에 정기 고정활동이 있어 연장할 수 없습니다.")
+
+    conn.execute("UPDATE reservations SET end_time = ? WHERE id = ?", (new_end_iso, res_id))
+    conn.commit()
+    return {
+        "ok": True,
+        "message": f"{row['applicant_name']}님의 예약을 {hours}시간 연장했습니다."
+                   f" (~{new_end_dt.strftime('%H:%M')})",
+        "end_time": new_end_iso,
+    }
 
 
 def approve(conn, res_id):

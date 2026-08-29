@@ -195,3 +195,291 @@ class TestFacilityCrud:
     def test_add_requires_name(self, admin_client):
         assert admin_client.post(f"{BASE}/admin/facilities",
                                  json={"type": "회의실"}).status_code == 400
+
+
+class TestFormConfig:
+    def test_requires_login(self, client):
+        assert client.get(f"{BASE}/admin/form-config").status_code == 401
+        assert client.put(f"{BASE}/admin/form-config", json={}).status_code == 401
+
+    def test_update_catalog_and_texts(self, admin_client):
+        r = admin_client.put(f"{BASE}/admin/form-config", json={
+            "equipment_catalog": [{
+                "title": "음향", "facility_types": ["회의실"], "allow_other": False,
+                "items": ["빔 프로젝터", {"name": "마이크", "qty": True}, "  "],
+            }],
+            "notice": ["당일 대관 불가", ""],
+            "rules": "첫째 줄\n둘째 줄",
+        })
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["equipment_catalog"] == [{
+            "title": "음향", "facility_types": ["회의실"], "allow_other": False,
+            "items": [{"name": "빔 프로젝터", "qty": False}, {"name": "마이크", "qty": True}],
+        }]
+        assert d["notice"] == ["당일 대관 불가"]
+        assert d["rules"] == ["첫째 줄", "둘째 줄"]
+        # 공개 엔드포인트에도 즉시 반영된다.
+        pub = admin_client.get(f"{BASE}/form-config?facility_type=연습실").get_json()
+        assert pub["equipment_catalog"] == []
+
+    def test_partial_update_keeps_others(self, admin_client):
+        before = admin_client.get(f"{BASE}/admin/form-config").get_json()
+        admin_client.put(f"{BASE}/admin/form-config", json={"notice": ["하나만 수정"]})
+        after = admin_client.get(f"{BASE}/admin/form-config").get_json()
+        assert after["notice"] == ["하나만 수정"]
+        assert after["rules"] == before["rules"]
+        assert after["equipment_catalog"] == before["equipment_catalog"]
+
+    def test_rejects_bad_shape(self, admin_client):
+        assert admin_client.put(f"{BASE}/admin/form-config",
+                                json={"equipment_catalog": "장비"}).status_code == 400
+
+
+class TestAttendance:
+    def _make(self, admin_client, **kw):
+        return admin_client.post(f"{BASE}/admin/reservations",
+                                 json=reservation_payload(**kw)).get_json()["id"]
+
+    def test_requires_login(self, client):
+        assert client.post(f"{BASE}/admin/reservations/1/attendance",
+                           json={"attendance": "attended"}).status_code == 401
+
+    def test_records_and_reports_block(self, admin_client):
+        rid = self._make(admin_client)
+        r = admin_client.post(f"{BASE}/admin/reservations/{rid}/attendance",
+                              json={"attendance": "no_show"})
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["attendance"] == "no_show" and d["blocked_until"]
+        assert admin_client.get(
+            f"{BASE}/admin/reservations/{rid}").get_json()["attendance"] == "no_show"
+
+    def test_attended_has_no_block(self, admin_client):
+        rid = self._make(admin_client)
+        d = admin_client.post(f"{BASE}/admin/reservations/{rid}/attendance",
+                              json={"attendance": "attended"}).get_json()
+        assert d["blocked_until"] is None
+
+    def test_invalid_value(self, admin_client):
+        rid = self._make(admin_client)
+        assert admin_client.post(f"{BASE}/admin/reservations/{rid}/attendance",
+                                 json={"attendance": "결석"}).status_code == 400
+
+    def test_unknown_reservation(self, admin_client):
+        assert admin_client.post(f"{BASE}/admin/reservations/999/attendance",
+                                 json={"attendance": "attended"}).status_code == 404
+
+    def test_survives_admin_edit(self, admin_client):
+        rid = self._make(admin_client)
+        admin_client.post(f"{BASE}/admin/reservations/{rid}/attendance",
+                          json={"attendance": "no_show"})
+        admin_client.put(f"{BASE}/admin/reservations/{rid}",
+                         json=reservation_payload(status="confirmed"))
+        assert admin_client.get(
+            f"{BASE}/admin/reservations/{rid}").get_json()["attendance"] == "no_show"
+
+
+class TestExtend:
+    def _make(self, admin_client, **kw):
+        return admin_client.post(f"{BASE}/admin/reservations",
+                                 json=reservation_payload(**kw)).get_json()["id"]
+
+    def test_requires_login(self, client):
+        assert client.post(f"{BASE}/admin/reservations/1/extend").status_code == 401
+
+    def test_extends_one_hour(self, admin_client):
+        rid = self._make(admin_client, hours=[10, 11])
+        r = admin_client.post(f"{BASE}/admin/reservations/{rid}/extend")
+        assert r.status_code == 200
+        assert r.get_json()["end_time"].endswith("T13:00:00")
+
+    def test_blocked_by_next_reservation(self, admin_client):
+        rid = self._make(admin_client, hours=[10, 11])
+        self._make(admin_client, hours=[12], name="다음팀", contact="010-1111-2222")
+        r = admin_client.post(f"{BASE}/admin/reservations/{rid}/extend")
+        assert r.status_code == 400 and "다른 대관예약" in r.get_json()["error"]
+
+    def test_blocked_by_closing_hour(self, admin_client):
+        # 운영 종료 18시 → 17시 종료 예약은 연장 가능하지만 18시 종료는 불가.
+        rid = self._make(admin_client, hours=[16, 17])
+        r = admin_client.post(f"{BASE}/admin/reservations/{rid}/extend")
+        assert r.status_code == 400 and "운영 종료" in r.get_json()["error"]
+
+    def test_pending_not_extendable(self, admin_client):
+        access_id = admin_client.post(f"{BASE}/reservations",
+                                      json=reservation_payload()).get_json()["access_id"]
+        rid = admin_client.get(f"{BASE}/reservations/{access_id}").get_json()["id"]
+        r = admin_client.post(f"{BASE}/admin/reservations/{rid}/extend")
+        assert r.status_code == 400 and "확정된 예약" in r.get_json()["error"]
+
+    def test_unknown_reservation(self, admin_client):
+        assert admin_client.post(f"{BASE}/admin/reservations/999/extend").status_code == 404
+
+
+class TestBookingRules:
+    def test_requires_login(self, client):
+        assert client.get(f"{BASE}/admin/booking-rules").status_code == 401
+        assert client.put(f"{BASE}/admin/booking-rules", json={}).status_code == 401
+
+    def test_defaults_seeded(self, admin_client):
+        d = admin_client.get(f"{BASE}/admin/booking-rules").get_json()["booking_rules"]
+        assert d["cancel_deadline_days"] == 1
+        assert d["penalty_months"] == 6
+        assert d["extension_hours"] == 1
+
+    def test_partial_update(self, admin_client):
+        r = admin_client.put(f"{BASE}/admin/booking-rules", json={"penalty_months": 3})
+        assert r.status_code == 200
+        rules = r.get_json()["booking_rules"]
+        assert rules["penalty_months"] == 3 and rules["cancel_deadline_days"] == 1
+
+    def test_out_of_range(self, admin_client):
+        assert admin_client.put(f"{BASE}/admin/booking-rules",
+                                json={"penalty_months": 999}).status_code == 400
+
+    def test_non_numeric(self, admin_client):
+        assert admin_client.put(f"{BASE}/admin/booking-rules",
+                                json={"cancel_deadline_days": "하루"}).status_code == 400
+
+    def test_min_cannot_exceed_max(self, admin_client):
+        assert admin_client.put(f"{BASE}/admin/booking-rules", json={
+            "booking_min_days": 30, "booking_max_days": 10}).status_code == 400
+
+    def test_affects_booking_window(self, admin_client):
+        admin_client.put(f"{BASE}/admin/booking-rules", json={"booking_max_days": 3})
+        d = admin_client.get(f"{BASE}/availability").get_json()
+        from datetime import date, timedelta
+        assert d["max_date"] == (date.today() + timedelta(days=3)).isoformat()
+        # 범위를 벗어난 날짜는 신청도 막힌다.
+        assert admin_client.post(f"{BASE}/reservations", json=reservation_payload(
+            date=(date.today() + timedelta(days=10)).isoformat())).status_code == 400
+
+    def test_zero_deadline_allows_same_day_cancel(self, admin_client):
+        from datetime import date
+        admin_client.put(f"{BASE}/admin/booking-rules", json={"cancel_deadline_days": 0})
+        rid = admin_client.post(f"{BASE}/admin/reservations", json=reservation_payload(
+            date=date.today().isoformat())).get_json()["id"]
+        assert admin_client.post(f"{BASE}/reservations/{rid}/cancel").status_code == 200
+
+    def test_zero_penalty_disables_block(self, admin_client):
+        from datetime import date, timedelta
+        admin_client.put(f"{BASE}/admin/booking-rules", json={"penalty_months": 0})
+        past = (date.today() - timedelta(days=30)).isoformat()
+        rid = admin_client.post(f"{BASE}/admin/reservations",
+                                json=reservation_payload(date=past)).get_json()["id"]
+        admin_client.post(f"{BASE}/admin/reservations/{rid}/attendance",
+                          json={"attendance": "no_show"})
+        assert admin_client.post(f"{BASE}/reservations",
+                                 json=reservation_payload()).status_code == 201
+
+
+class TestClubs:
+    """동아리 목록 프록시 — 외부 서비스가 죽어도 화면이 살아있어야 한다."""
+
+    def test_requires_login(self, client):
+        assert client.get(f"{BASE}/admin/clubs").status_code == 401
+
+    def test_normalizes_and_sorts(self, admin_client, monkeypatch):
+        from services import club_service
+        club_service.clear_cache()
+        monkeypatch.setattr(club_service, "_request", lambda url: {
+            "club_dict": {"무시됨": "무시"},
+            "clubs": [
+                {"category": "밴드", "name": "하이라이트"},
+                {"category": "과학", "name": "클러스터"},
+                {"category": "밴드", "name": " 보히 "},
+                {"category": "밴드", "name": "보히"},   # 중복
+                {"category": "밴드", "name": "  "},     # 빈 이름
+            ],
+        })
+        d = admin_client.get(f"{BASE}/admin/clubs").get_json()
+        assert d["available"] is True
+        assert d["clubs"] == [
+            {"name": "클러스터", "category": "과학"},
+            {"name": "보히", "category": "밴드"},
+            {"name": "하이라이트", "category": "밴드"},
+        ]
+
+    def test_falls_back_to_club_dict(self, admin_client, monkeypatch):
+        from services import club_service
+        club_service.clear_cache()
+        monkeypatch.setattr(club_service, "_request",
+                            lambda url: {"club_dict": {"블리스": "댄스"}})
+        d = admin_client.get(f"{BASE}/admin/clubs").get_json()
+        assert d["clubs"] == [{"name": "블리스", "category": "댄스"}]
+
+    def test_caches_between_calls(self, admin_client, monkeypatch):
+        from services import club_service
+        club_service.clear_cache()
+        calls = []
+
+        def fake(url):
+            calls.append(url)
+            return {"clubs": [{"name": "필락", "category": "미술"}]}
+
+        monkeypatch.setattr(club_service, "_request", fake)
+        admin_client.get(f"{BASE}/admin/clubs")
+        assert admin_client.get(f"{BASE}/admin/clubs").get_json()["cached"] is True
+        assert len(calls) == 1
+        # refresh=1 이면 캐시를 무시하고 다시 부른다.
+        admin_client.get(f"{BASE}/admin/clubs?refresh=1")
+        assert len(calls) == 2
+
+    def test_degrades_when_service_down(self, admin_client, monkeypatch):
+        import urllib.error
+        from services import club_service
+        club_service.clear_cache()
+
+        def boom(url):
+            raise urllib.error.URLError("연결 실패")
+
+        monkeypatch.setattr(club_service, "_request", boom)
+        r = admin_client.get(f"{BASE}/admin/clubs")
+        # 200 으로 내려야 프론트가 '직접 입력' 으로 계속 진행할 수 있다.
+        assert r.status_code == 200
+        d = r.get_json()
+        assert d["available"] is False and d["clubs"] == [] and d["error"]
+
+    def test_degrades_on_404(self, admin_client, monkeypatch):
+        import urllib.error
+        from services import club_service
+        club_service.clear_cache()
+
+        def missing(url):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+
+        monkeypatch.setattr(club_service, "_request", missing)
+        d = admin_client.get(f"{BASE}/admin/clubs").get_json()
+        assert d["available"] is False and "등록되어 있지 않" in d["error"]
+
+
+class TestClubShortReservation:
+    """동아리 단기대관 — 신청인 정보 없이 동아리명만으로 추가."""
+
+    def test_club_name_used_as_display_name(self, admin_client):
+        r = admin_client.post(f"{BASE}/admin/reservations", json={
+            "facility_id": 1, "date": valid_date(), "hours": [14, 15],
+            "club": "하이라이트", "activity": "공연 준비", "participants": {}, "equipment": [],
+        })
+        assert r.status_code == 201
+        d = admin_client.get(f"{BASE}/admin/reservations/{r.get_json()['id']}").get_json()
+        assert d["applicant_name"] == "하이라이트"
+        assert d["applicant_club"] == "하이라이트"
+        assert d["activity"] == "공연 준비"
+        assert d["status"] == "confirmed"
+
+    def test_explicit_name_wins(self, admin_client):
+        r = admin_client.post(f"{BASE}/admin/reservations", json={
+            "facility_id": 1, "date": valid_date(), "hours": [14],
+            "name": "김담당", "club": "하이라이트", "participants": {},
+        })
+        d = admin_client.get(f"{BASE}/admin/reservations/{r.get_json()['id']}").get_json()
+        assert d["applicant_name"] == "김담당"
+
+    def test_still_blocks_overlap(self, admin_client):
+        payload = {"facility_id": 1, "date": valid_date(), "hours": [14, 15],
+                   "club": "하이라이트", "participants": {}}
+        assert admin_client.post(f"{BASE}/admin/reservations", json=payload).status_code == 201
+        assert admin_client.post(f"{BASE}/admin/reservations", json={
+            **payload, "club": "블리스", "hours": [15]}).status_code == 400

@@ -27,7 +27,9 @@ import db
 from config import is_valid_slug
 from db import get_place_db, get_super_db
 from services import (
+    club_service,
     facility_service,
+    form_settings_service,
     holiday_service,
     image_service,
     place_service,
@@ -361,6 +363,19 @@ def _register_place(app):
         target = reservation_service.parse_date(date_str)
         return jsonify(reservation_service.day_config(get_place_db(slug), target))
 
+    @app.get("/api/<slug>/form-config")
+    @place_required
+    def place_form_config(slug):
+        """신청 화면이 쓰는 서식 설정 — 필요 물품 목록 + 공지/대관규정.
+
+        facility_type 쿼리를 주면 해당 시설 유형에 해당하는 물품 분류만 반환.
+        """
+        conn = get_place_db(slug)
+        return jsonify({
+            **form_settings_service.get_form_config(conn, request.args.get("facility_type")),
+            "booking_rules": reservation_service.get_booking_rules(conn),
+        })
+
     @app.get("/api/<slug>/facilities/<int:facility_id>/booked-times")
     @place_required
     def place_booked_times(slug, facility_id):
@@ -552,13 +567,67 @@ def _register_place(app):
     @app.post("/api/<slug>/admin/recurring-blocks")
     @place_admin_required
     def place_blocks_add(slug):
-        reservation_service.add_recurring_block(get_place_db(slug), request.get_json(silent=True) or {})
-        return jsonify({"ok": True}), 201
+        result = reservation_service.add_recurring_block(
+            get_place_db(slug), request.get_json(silent=True) or {})
+        return jsonify(result), 201
+
+    @app.put("/api/<slug>/admin/recurring-blocks/<int:block_id>")
+    @place_admin_required
+    def place_blocks_update(slug, block_id):
+        return jsonify(reservation_service.update_recurring_block(
+            get_place_db(slug), block_id, request.get_json(silent=True) or {}))
 
     @app.delete("/api/<slug>/admin/recurring-blocks/<int:block_id>")
     @place_admin_required
     def place_blocks_delete(slug, block_id):
         return jsonify(reservation_service.delete_recurring_block(get_place_db(slug), block_id))
+
+    @app.post("/api/<slug>/admin/reservations/<int:res_id>/attendance")
+    @place_admin_required
+    def place_set_attendance(slug, res_id):
+        """이용 결과 기록(이용확인/노쇼/이용확인 미실시) — 재대관 제한의 근거."""
+        d = request.get_json(silent=True) or {}
+        return jsonify(reservation_service.set_attendance(
+            get_place_db(slug), res_id, d.get("attendance", "")))
+
+    @app.post("/api/<slug>/admin/reservations/<int:res_id>/extend")
+    @place_admin_required
+    def place_extend_reservation(slug, res_id):
+        """현장 연장 — 뒤이은 예약이 없을 때 종료 시각을 늘린다."""
+        return jsonify(reservation_service.extend(get_place_db(slug), res_id))
+
+    @app.get("/api/<slug>/admin/clubs")
+    @place_admin_required
+    def place_clubs(slug):
+        """동아리 목록(외부 ClubLog 프록시) — 단기대관 직접 추가용 선택지."""
+        return jsonify(club_service.list_clubs(
+            slug, refresh=request.args.get("refresh") in ("1", "true")))
+
+    # ---------------- 관리자 — 대관 규칙 ----------------
+    @app.get("/api/<slug>/admin/booking-rules")
+    @place_admin_required
+    def place_booking_rules_get(slug):
+        return jsonify({"booking_rules": reservation_service.get_booking_rules(get_place_db(slug))})
+
+    @app.put("/api/<slug>/admin/booking-rules")
+    @place_admin_required
+    def place_booking_rules_set(slug):
+        rules = reservation_service.set_booking_rules(
+            get_place_db(slug), request.get_json(silent=True) or {})
+        return jsonify({"ok": True, "message": "대관 규칙이 저장되었습니다.", "booking_rules": rules})
+
+    # ---------------- 관리자 — 신청서 설정 ----------------
+    @app.get("/api/<slug>/admin/form-config")
+    @place_admin_required
+    def place_form_config_get(slug):
+        return jsonify(form_settings_service.get_form_config(get_place_db(slug)))
+
+    @app.put("/api/<slug>/admin/form-config")
+    @place_admin_required
+    def place_form_config_set(slug):
+        result = form_settings_service.update_form_config(
+            get_place_db(slug), request.get_json(silent=True) or {})
+        return jsonify({"ok": True, "message": "신청서 설정이 저장되었습니다.", **result})
 
     # ---------------- 관리자 — 시설 관리 ----------------
     @app.get("/api/<slug>/admin/facilities")

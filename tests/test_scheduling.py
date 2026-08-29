@@ -113,7 +113,8 @@ class TestRecurringBlocks:
 
     def test_list_and_delete(self, admin_client):
         admin_client.post(f"{BASE}/admin/recurring-blocks",
-                          json={"facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 16})
+                          json={"facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 16,
+                                "title": "목요 프로그램", "kind": "program"})
         blocks = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"]
         assert len(blocks) == 1 and blocks[0]["facility_name"]
         bid = blocks[0]["id"]
@@ -169,7 +170,8 @@ class TestAdminBypass:
         wd = 1
         tue = date_with_weekday(wd).isoformat()
         admin_client.post(f"{BASE}/admin/recurring-blocks",
-                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12})
+                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12,
+                                "title": "밴드 정기연습", "kind": "club"})
         r = admin_client.post(f"{BASE}/admin/reservations",
                               json=reservation_payload(date=tue, facility_id=1, hours=[10, 11]))
         assert r.status_code == 201
@@ -188,7 +190,8 @@ class TestAdminBypass:
         wd = 1
         tue = date_with_weekday(wd).isoformat()
         admin_client.post(f"{BASE}/admin/recurring-blocks",
-                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12})
+                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12,
+                                "title": "밴드 정기연습", "kind": "club"})
         d = admin_client.get(f"{BASE}/admin/booked-times?facility_id=1&date={tue}").get_json()
         assert d["reserved"] == [] and d["blocked"] == [10, 11]
 
@@ -256,3 +259,73 @@ class TestFacilityImage:
             f.write(b"default")
         image_service.delete_image_file("/static/img/room001.jpg")
         assert os.path.isfile(path)  # 삭제되지 않아야 함
+
+
+class TestRecurringBlockKinds:
+    """정기 고정활동은 동아리 정기활동 외에 프로그램·점검 등도 담는다."""
+
+    def _add(self, admin_client, **over):
+        payload = {"facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 17,
+                   "title": "방송댄스반", "kind": "program"}
+        payload.update(over)
+        return admin_client.post(f"{BASE}/admin/recurring-blocks", json=payload)
+
+    def test_kind_stored_with_label(self, admin_client):
+        assert self._add(admin_client).status_code == 201
+        b = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"][0]
+        assert b["kind"] == "program" and b["kind_label"] == "프로그램"
+
+    def test_club_kind(self, admin_client):
+        self._add(admin_client, kind="club", title="하이라이트")
+        b = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"][0]
+        assert b["kind"] == "club" and b["kind_label"] == "동아리"
+
+    def test_defaults_to_etc(self, admin_client):
+        self._add(admin_client, kind=None, title="정기 시설 점검")
+        b = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"][0]
+        assert b["kind"] == "etc" and b["kind_label"] == "기타"
+
+    def test_rejects_unknown_kind(self, admin_client):
+        assert self._add(admin_client, kind="동아리").status_code == 400
+
+    def test_title_required(self, admin_client):
+        r = self._add(admin_client, title="   ")
+        assert r.status_code == 400 and "프로그램명" in r.get_json()["error"]
+
+    def test_title_message_matches_kind(self, admin_client):
+        r = self._add(admin_client, kind="club", title="")
+        assert "동아리명" in r.get_json()["error"]
+
+    def test_kind_reaches_day_grid(self, admin_client):
+        wd = 2
+        wed = date_with_weekday(wd).isoformat()
+        self._add(admin_client, weekday=wd, start_hour=14, end_hour=16,
+                  kind="club", title="하이라이트")
+        grid = admin_client.get(f"{BASE}/admin/day-grid?date={wed}").get_json()
+        fac = next(f for f in grid["facilities"] if f["id"] == 1)
+        seg = next(s for s in fac["segments"] if s["type"] == "block")
+        assert seg["title"] == "하이라이트" and seg["kind"] == "club"
+
+    def test_update(self, admin_client):
+        bid = self._add(admin_client).get_json()["id"]
+        r = admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}", json={
+            "facility_id": 2, "weekday": 4, "start_hour": 10, "end_hour": 12,
+            "title": "하이라이트", "kind": "club"})
+        assert r.status_code == 200
+        b = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"][0]
+        assert (b["facility_id"], b["weekday"], b["start_hour"], b["end_hour"]) == (2, 4, 10, 12)
+        assert b["kind"] == "club" and b["title"] == "하이라이트"
+
+    def test_update_validates(self, admin_client):
+        bid = self._add(admin_client).get_json()["id"]
+        assert admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}", json={
+            "facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 17,
+            "title": "", "kind": "program"}).status_code == 400
+
+    def test_update_unknown(self, admin_client):
+        assert admin_client.put(f"{BASE}/admin/recurring-blocks/999", json={
+            "facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 17,
+            "title": "x", "kind": "etc"}).status_code == 404
+
+    def test_update_requires_login(self, client):
+        assert client.put(f"{BASE}/admin/recurring-blocks/1", json={}).status_code == 401

@@ -98,7 +98,8 @@ def reservation_payload(**overrides):
         "contact": "010-1234-5678",
         "school": "나름중",
         "club": "밴드부",
-        "participants": {"middle": 3},
+        "activity": "밴드 합주 연습",
+        "participants": {"middle": {"male": 2, "female": 1}},
         "equipment": [],
     }
     payload.update(overrides)
