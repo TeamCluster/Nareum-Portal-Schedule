@@ -11,7 +11,7 @@
 ## 실행
 ```bash
 pip install -r requirements.txt
-python app.py          # http://127.0.0.1:5000
+python app.py          # http://127.0.0.1:8000
 ```
 - 첫 실행 시 `db/super.sqlite3` 를 만들고 **슈퍼 임시 비밀번호를 콘솔에 1회 출력**하며, `SECRET_KEY` 를 자동 생성해 DB 에 저장합니다.
 - 기관이 하나도 없으면 **기본 기관 `nareum`**(시설 5종)을 시딩합니다(관리자 임시 비번 `manage123`).
@@ -164,13 +164,31 @@ PUT  /api/<slug>/admin/form-config                  # 보낸 키만 부분 수�
 ## 테스트
 ```bash
 pip install -r requirements-dev.txt
-pytest                 # 200 케이스: 도메인 규칙 + 슈퍼/기관공개/기관관리자 + 테넌트 격리
+pytest                 # 212 케이스: 도메인 규칙 + 슈퍼/기관공개/기관관리자 + 테넌트 격리
 ```
 테스트는 `DB_FOLDER` 를 임시 폴더로 지정해 격리 실행합니다.
 
-## 배포 시 반드시 바꿀 것 ⚠️
-1. **슈퍼 비밀번호** — 첫 로그인 후 `/super/password` 로 즉시 변경 (또는 `SUPER_PASSWORD` 주입).
-2. **기관 관리자 비밀번호** — 슈퍼 페이지에서 기관별로 변경.
-3. **`CORS_ORIGINS`** — 프론트 실제 도메인.
-4. **쿠키** — cross-site HTTPS 면 `SESSION_COOKIE_SAMESITE=None`, `SESSION_COOKIE_SECURE=true`.
-5. **WSGI 서버** — `app.run(debug=True)` 는 개발용. 운영은 gunicorn/waitress 로 `app:app` 서빙.
+## 배포
+
+전체 절차·점검표는 **[docs/배포-가이드.md](docs/배포-가이드.md)** 를 보세요. 요약:
+
+```bash
+pip install -r requirements.txt
+gunicorn -c gunicorn.conf.py wsgi:app      # 운영. python app.py 는 개발 전용
+```
+
+반드시 확인할 것:
+1. **영구 볼륨** — `DB_FOLDER`·`STATIC_ROOT` 를 앱 디렉터리 밖으로. 안 하면 재배포 시 데이터 소실. 부팅 로그 `[storage]` 확인.
+2. **백업** — `scripts/backup.py` 를 크론에 등록.
+3. **슈퍼 비밀번호** — 첫 로그인 후 `/super/password` 로 즉시 변경 (또는 `SUPER_PASSWORD` 주입).
+4. **기관 관리자 비밀번호** — `DEFAULT_PLACE_PASSWORD` 미지정 시 `manage123`. 반드시 변경.
+5. **`TRUSTED_PROXY_HOPS=1`** — 프록시 뒤라면 필수. 안 켜면 Secure 쿠키와 로그인 시도 제한이 모두 오작동.
+6. **쿠키** — HTTPS 면 `SESSION_COOKIE_SECURE=true`. cross-site 면 `SAMESITE=None` 까지.
+
+## 보안 장치
+- 비밀번호: werkzeug pbkdf2 해시 (평문 저장 없음)
+- 로그인 시도 제한: IP·범위별 10회 실패 시 15분 잠금 (`services/rate_limit.py`)
+- 공개 예약 취소: 이름+연락처 본인 확인 필요 (id 열거로 남의 예약을 취소할 수 없음)
+- 업로드: 6MB 요청 상한 + 매직 바이트로 실제 이미지 형식 검증
+- 입력: 이름/연락처/물품 등 길이 상한
+- 동시성: SQLite WAL + `BEGIN IMMEDIATE` 로 이중 예약 차단

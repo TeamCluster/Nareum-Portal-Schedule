@@ -12,10 +12,35 @@ import uuid
 from datetime import date, datetime, time, timedelta
 
 import config
+from db import write_lock
 from . import facility_service, holiday_service
 from .errors import ApiError
 
 ISO = "%Y-%m-%dT%H:%M:%S"
+
+# --- 입력 길이 상한 -------------------------------------------------------
+# 공개(비로그인) 신청에서 들어오는 값이므로 상한이 없으면 임의 크기의 행을
+# 무제한으로 밀어넣을 수 있다. 실제 입력보다 넉넉하되 남용은 막는 값.
+MAX_NAME_LENGTH = 50
+MAX_CONTACT_LENGTH = 30
+MAX_SCHOOL_LENGTH = 100
+MAX_CLUB_LENGTH = 100
+MAX_REASON_LENGTH = 500
+# 물품 목록이 종이 서식(음악 14종 + 댄스/강의 5종 + 기타 직접입력)만큼 늘어 20 -> 30.
+MAX_EQUIPMENT_ITEMS = 30
+MAX_EQUIPMENT_LENGTH = 50
+MAX_EQUIPMENT_QTY = 100
+MAX_PARTICIPANTS_PER_GROUP = 1000
+MAX_ADDRESS_LENGTH = 200
+MAX_ACTIVITY_LENGTH = 200
+
+
+def _clip(value, limit, label):
+    """문자열 정리 + 길이 검증. 초과하면 자르지 않고 거절한다(조용한 절삭 방지)."""
+    text = (value or "").strip()
+    if len(text) > limit:
+        raise ApiError(f"{label}은(는) {limit}자 이내여야 합니다.")
+    return text
 
 
 # ----------------------------------------------------------------------
@@ -485,18 +510,23 @@ def parse_participants(payload):
     if not isinstance(payload, dict):
         raise ApiError("참가 인원 값이 올바르지 않습니다.")
 
+    def count_of(raw):
+        n = _positive_int(raw, "참가 인원 값이 올바르지 않습니다.")
+        if n > MAX_PARTICIPANTS_PER_GROUP:
+            raise ApiError(
+                f"참가 인원은 구분별 0~{MAX_PARTICIPANTS_PER_GROUP}명 사이여야 합니다."
+            )
+        return n
+
     result = {}
     for band in config.PARTICIPANT_BANDS:
         raw = payload.get(band, 0)
         if isinstance(raw, dict):
-            counts = {
-                g: _positive_int(raw.get(g), "참가 인원 값이 올바르지 않습니다.")
-                for g in config.PARTICIPANT_GENDERS
-            }
+            counts = {g: count_of(raw.get(g)) for g in config.PARTICIPANT_GENDERS}
         else:
             # 레거시(성별 미구분) 숫자.
             counts = {g: 0 for g in config.PARTICIPANT_GENDERS}
-            counts["unspecified"] = _positive_int(raw, "참가 인원 값이 올바르지 않습니다.")
+            counts["unspecified"] = count_of(raw)
         result[band] = counts
     return result
 
@@ -516,6 +546,8 @@ def parse_equipment(payload):
         return []
     if not isinstance(payload, list):
         raise ApiError("필요 물품 값이 올바르지 않습니다.")
+    if len(payload) > MAX_EQUIPMENT_ITEMS:
+        raise ApiError(f"요청 물품은 최대 {MAX_EQUIPMENT_ITEMS}개까지 선택할 수 있습니다.")
 
     items, seen = [], set()
     for entry in payload:
@@ -523,16 +555,15 @@ def parse_equipment(payload):
             entry = {"name": entry}
         if not isinstance(entry, dict):
             raise ApiError("필요 물품 값이 올바르지 않습니다.")
-        name = (entry.get("name") or "").strip()[:100]
+        name = _clip(entry.get("name"), MAX_EQUIPMENT_LENGTH, "요청 물품명")
         if not name or name in seen:
             continue
         qty = _positive_int(entry.get("qty", 1), "필요 물품 수량이 올바르지 않습니다.") or 1
+        if qty > MAX_EQUIPMENT_QTY:
+            raise ApiError(f"요청 물품 수량은 {MAX_EQUIPMENT_QTY} 이하여야 합니다.")
         seen.add(name)
         items.append({"name": name, "qty": qty})
     return items
-
-
-MAX_ACTIVITY_LEN = 200
 
 
 def parse_applicant(data, require_activity=False):
@@ -541,11 +572,9 @@ def parse_applicant(data, require_activity=False):
     require_activity 는 공개 신청에서만 True — 관리자 직접 추가는 활동내용을
     나중에 채울 수 있게 비워둘 수 있다.
     """
-    name = (data.get("name") or "").strip()
-    contact = (data.get("contact") or "").strip()
-    activity = (data.get("activity") or "").strip()
-    if len(activity) > MAX_ACTIVITY_LEN:
-        raise ApiError(f"활동내용은 {MAX_ACTIVITY_LEN}자를 넘을 수 없습니다.")
+    name = _clip(data.get("name"), MAX_NAME_LENGTH, "이름")
+    contact = _clip(data.get("contact"), MAX_CONTACT_LENGTH, "연락처")
+    activity = _clip(data.get("activity"), MAX_ACTIVITY_LENGTH, "활동내용")
     if require_activity and not activity:
         raise ApiError("활동내용을 입력해주세요. (예: 춤연습, 밴드합주, 보드게임)")
 
@@ -558,10 +587,10 @@ def parse_applicant(data, require_activity=False):
         "name": name,
         "contact": contact,
         "age": age,
-        "school": (data.get("school") or "").strip() or None,
-        "club": (data.get("club") or "").strip() or None,
+        "school": _clip(data.get("school"), MAX_SCHOOL_LENGTH, "학교명") or None,
+        "club": _clip(data.get("club"), MAX_CLUB_LENGTH, "동아리명") or None,
         # 종이 서식의 '주소 또는 E-Mail' 칸.
-        "address": (data.get("address") or "").strip()[:200] or None,
+        "address": _clip(data.get("address"), MAX_ADDRESS_LENGTH, "주소 또는 E-Mail") or None,
         "activity": activity,
     }
 
@@ -807,27 +836,28 @@ def create_public_reservation(conn, data):
             f"일주일에 최대 {config.WEEKLY_LIMIT}회까지만 예약하실 수 있습니다."
         )
 
-    if has_overlap(conn, facility_id, start_iso, end_iso):
-        raise ApiError("선택하신 시간에 이미 다른 예약이 진행 중입니다.")
-    if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
-        raise ApiError("선택하신 시간은 정기 고정활동이 있어 예약할 수 없습니다.")
-
     access_id = str(uuid.uuid4())
     now = datetime.now().strftime(ISO)
-    conn.execute(
-        "INSERT INTO reservations"
-        " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
-        "  applicant_club, applicant_age, applicant_address, activity, status,"
-        "  start_time, end_time, participant_info,"
-        "  requested_equipment, is_deleted, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
-        (access_id, facility_id, name, contact, applicant["school"], applicant["club"],
-         applicant["age"], applicant["address"], applicant["activity"],
-         start_iso, end_iso,
-         json.dumps(participants, ensure_ascii=False),
-         json.dumps(equipment, ensure_ascii=False), now),
-    )
-    conn.commit()
+    # 겹침 검사와 INSERT 사이에 다른 요청이 끼어들면 이중 예약이 되므로
+    # 쓰기 잠금을 잡은 채로 다시 확인하고 넣는다.
+    with write_lock(conn):
+        if has_overlap(conn, facility_id, start_iso, end_iso):
+            raise ApiError("선택하신 시간에 이미 다른 예약이 진행 중입니다.")
+        if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
+            raise ApiError("선택하신 시간은 정기 고정활동이 있어 예약할 수 없습니다.")
+        conn.execute(
+            "INSERT INTO reservations"
+            " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
+            "  applicant_club, applicant_age, applicant_address, activity, status,"
+            "  start_time, end_time, participant_info,"
+            "  requested_equipment, is_deleted, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 0, ?)",
+            (access_id, facility_id, name, contact, applicant["school"], applicant["club"],
+             applicant["age"], applicant["address"], applicant["activity"],
+             start_iso, end_iso,
+             json.dumps(participants, ensure_ascii=False),
+             json.dumps(equipment, ensure_ascii=False), now),
+        )
     return access_id
 
 
@@ -851,12 +881,26 @@ def lookup(conn, name, contact):
     return _to_dicts(conn, rows)
 
 
-def cancel(conn, res_id):
-    """신청자 직접 취소 — 이용일 기준 취소 마감을 지나면 거절한다(규정: 대관 1일 전까지).
+def cancel(conn, res_id, name, contact):
+    """공개 취소 — 본인 확인(이름+연락처) + 취소 마감(규정: 대관 1일 전까지).
 
-    마감 이후 취소는 담당자가 관리자 화면에서 상태를 바꾸는 경로만 남긴다.
+    이 라우트는 로그인 없이 열려 있으므로 소유자 확인이 없으면 예약 id 를
+    1 부터 훑는 것만으로 전체 예약을 말소할 수 있다(IDOR). `lookup` 과 같은
+    기준(이름+연락처)으로 대조하고, 불일치와 부재를 같은 404 로 응답해
+    id 존재 여부가 새어나가지 않게 한다.
+
+    마감을 지난 취소는 담당자가 관리자 화면에서 상태를 바꾸는 경로만 남긴다.
     """
-    row = conn.execute("SELECT * FROM reservations WHERE id = ?", (res_id,)).fetchone()
+    name = _clip(name, MAX_NAME_LENGTH, "이름")
+    contact = _clip(contact, MAX_CONTACT_LENGTH, "연락처")
+    if not name or not contact:
+        raise ApiError("예약자 이름과 연락처를 입력해주세요.")
+
+    row = conn.execute(
+        "SELECT id, status, is_deleted, start_time FROM reservations"
+        " WHERE id = ? AND applicant_name = ? AND applicant_contact = ?",
+        (res_id, name, contact),
+    ).fetchone()
     if row is None:
         raise ApiError("예약 정보를 찾을 수 없습니다.", 404)
     if row["is_deleted"] or row["status"] not in ("confirmed", "pending"):
@@ -1097,10 +1141,6 @@ def create_admin_reservation(conn, data):
     start_hour, end_hour = resolve_hours(data.get("hours"), cfg["open_hour"], cfg["close_hour"])
     start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
 
-    # 실제 예약 간 중복(이중 예약)은 여전히 차단.
-    if has_overlap(conn, facility_id, start_iso, end_iso):
-        raise ApiError("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
-
     warnings = []
     if not cfg["is_open"]:
         warnings.append(f"휴무일({cfg['closed_reason']})에 예약을 추가했습니다.")
@@ -1115,21 +1155,25 @@ def create_admin_reservation(conn, data):
     # (현황표/목록에서 빈칸으로 보이지 않도록).
     if not applicant["name"] and applicant["club"]:
         applicant["name"] = applicant["club"]
-    cur = conn.execute(
-        "INSERT INTO reservations"
-        " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
-        "  applicant_club, applicant_age, applicant_address, activity, status,"
-        "  start_time, end_time, participant_info,"
-        "  requested_equipment, is_deleted, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 0, ?)",
-        (access_id, facility_id,
-         applicant["name"], applicant["contact"], applicant["school"], applicant["club"],
-         applicant["age"], applicant["address"], applicant["activity"],
-         start_iso, end_iso,
-         json.dumps(participants, ensure_ascii=False),
-         json.dumps(parse_equipment(data.get("equipment")), ensure_ascii=False), now),
-    )
-    conn.commit()
+    equipment = parse_equipment(data.get("equipment"))
+    # 실제 예약 간 중복(이중 예약)은 여전히 차단 — 쓰기 잠금 안에서 확인.
+    with write_lock(conn):
+        if has_overlap(conn, facility_id, start_iso, end_iso):
+            raise ApiError("선택하신 시설/시간에 이미 등록된 예약이 있어 추가할 수 없습니다.")
+        cur = conn.execute(
+            "INSERT INTO reservations"
+            " (access_id, facility_id, applicant_name, applicant_contact, applicant_school,"
+            "  applicant_club, applicant_age, applicant_address, activity, status,"
+            "  start_time, end_time, participant_info,"
+            "  requested_equipment, is_deleted, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 0, ?)",
+            (access_id, facility_id,
+             applicant["name"], applicant["contact"], applicant["school"], applicant["club"],
+             applicant["age"], applicant["address"], applicant["activity"],
+             start_iso, end_iso,
+             json.dumps(participants, ensure_ascii=False),
+             json.dumps(equipment, ensure_ascii=False), now),
+        )
     return {"ok": True, "id": cur.lastrowid, "warnings": warnings}
 
 
@@ -1148,9 +1192,6 @@ def update_reservation(conn, res_id, data):
     start_hour, end_hour = resolve_hours(data.get("hours"), cfg["open_hour"], cfg["close_hour"])
     start_iso, end_iso = _hours_to_iso(target_date, start_hour, end_hour)
 
-    if has_overlap(conn, facility_id, start_iso, end_iso, exclude_res_id=res_id):
-        raise ApiError("선택하신 시설/시간에 이미 등록된 다른 예약이 있어 변경할 수 없습니다.")
-
     warnings = []
     if not cfg["is_open"]:
         warnings.append(f"휴무일({cfg['closed_reason']})로 지정된 날짜입니다.")
@@ -1162,23 +1203,28 @@ def update_reservation(conn, res_id, data):
         raise ApiError("올바르지 않은 상태 값입니다.")
 
     is_deleted = 1 if new_status in ("cancelled", "rejected") else 0
-    reject_reason = data.get("reject_reason", "") if new_status == "rejected" else None
-
+    reject_reason = _clip(data.get("reject_reason", ""), MAX_REASON_LENGTH,
+                          "거절 사유") if new_status == "rejected" else None
     applicant = parse_applicant(data)
-    conn.execute(
-        "UPDATE reservations SET facility_id = ?, start_time = ?, end_time = ?,"
-        " applicant_name = ?, applicant_contact = ?, applicant_school = ?,"
-        " applicant_club = ?, applicant_age = ?, applicant_address = ?, activity = ?,"
-        " participant_info = ?, requested_equipment = ?,"
-        " status = ?, is_deleted = ?, reject_reason = ? WHERE id = ?",
-        (facility_id, start_iso, end_iso,
-         applicant["name"], applicant["contact"], applicant["school"], applicant["club"],
-         applicant["age"], applicant["address"], applicant["activity"],
-         json.dumps(parse_participants(data.get("participants")), ensure_ascii=False),
-         json.dumps(parse_equipment(data.get("equipment")), ensure_ascii=False),
-         new_status, is_deleted, reject_reason, res_id),
-    )
-    conn.commit()
+    participants = parse_participants(data.get("participants"))
+    equipment = parse_equipment(data.get("equipment"))
+
+    with write_lock(conn):
+        if has_overlap(conn, facility_id, start_iso, end_iso, exclude_res_id=res_id):
+            raise ApiError("선택하신 시설/시간에 이미 등록된 다른 예약이 있어 변경할 수 없습니다.")
+        conn.execute(
+            "UPDATE reservations SET facility_id = ?, start_time = ?, end_time = ?,"
+            " applicant_name = ?, applicant_contact = ?, applicant_school = ?,"
+            " applicant_club = ?, applicant_age = ?, applicant_address = ?, activity = ?,"
+            " participant_info = ?, requested_equipment = ?,"
+            " status = ?, is_deleted = ?, reject_reason = ? WHERE id = ?",
+            (facility_id, start_iso, end_iso,
+             applicant["name"], applicant["contact"], applicant["school"], applicant["club"],
+             applicant["age"], applicant["address"], applicant["activity"],
+             json.dumps(participants, ensure_ascii=False),
+             json.dumps(equipment, ensure_ascii=False),
+             new_status, is_deleted, reject_reason, res_id),
+        )
     return {"ok": True, "message": "예약 정보가 성공적으로 수정되었습니다.", "warnings": warnings}
 
 
@@ -1248,14 +1294,15 @@ def extend(conn, res_id):
         )
 
     new_end_iso = new_end_dt.strftime(ISO)
-    if has_overlap(conn, row["facility_id"], row["end_time"], new_end_iso, exclude_res_id=res_id):
-        raise ApiError("뒤이은 시간에 다른 대관예약이 있어 연장할 수 없습니다.")
-    if has_block_overlap(conn, row["facility_id"], target_date.weekday(),
-                         end_dt.hour, end_dt.hour + hours):
-        raise ApiError("뒤이은 시간에 정기 고정활동이 있어 연장할 수 없습니다.")
-
-    conn.execute("UPDATE reservations SET end_time = ? WHERE id = ?", (new_end_iso, res_id))
-    conn.commit()
+    # 연장할 시간에 다른 예약이 들어오는 것과 경쟁하므로 쓰기 잠금 안에서 확인한다.
+    with write_lock(conn):
+        if has_overlap(conn, row["facility_id"], row["end_time"], new_end_iso,
+                       exclude_res_id=res_id):
+            raise ApiError("뒤이은 시간에 다른 대관예약이 있어 연장할 수 없습니다.")
+        if has_block_overlap(conn, row["facility_id"], target_date.weekday(),
+                             end_dt.hour, end_dt.hour + hours):
+            raise ApiError("뒤이은 시간에 정기 고정활동이 있어 연장할 수 없습니다.")
+        conn.execute("UPDATE reservations SET end_time = ? WHERE id = ?", (new_end_iso, res_id))
     return {
         "ok": True,
         "message": f"{row['applicant_name']}님의 예약을 {hours}시간 연장했습니다."

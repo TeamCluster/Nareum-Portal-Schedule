@@ -13,6 +13,10 @@ from datetime import date, timedelta
 import pytest
 
 # --- app 임포트 전에 환경을 먼저 세팅 (config 가 import 시 읽음) ------------
+# 로컬 .env 는 무시한다. 개발자 머신의 .env 에는 운영값(FORCE_HTTPS 등)이 들어
+# 있을 수 있고, 그러면 테스트 결과가 머신마다 달라진다.
+os.environ["LOAD_DOTENV"] = "0"
+
 _TMP_DB = tempfile.mkdtemp(prefix="spacelog-test-")
 os.environ["DB_FOLDER"] = _TMP_DB
 os.environ["STATIC_ROOT"] = tempfile.mkdtemp(prefix="spacelog-static-")

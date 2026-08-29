@@ -66,8 +66,14 @@ instance/
 .webassets-cache
 
 # 멀티테넌트 런타임 SQLite (슈퍼 + 기관별 DB)
+# -wal / -shm 은 WAL 모드에서 가동 중에만 생기는 부산물(앱이 멈추면 사라짐).
 db/*.sqlite3
 db/*.sqlite3-journal
+db/*.sqlite3-wal
+db/*.sqlite3-shm
+
+# 백업 스냅샷 (scripts/backup.py)
+backups/
 
 # 업로드된 기관 이미지(시설/헤더 로고). 기본 이미지 static/img/ 는 유지.
 static/*/facility/

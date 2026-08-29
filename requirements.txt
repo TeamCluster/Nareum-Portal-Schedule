@@ -1,4 +1,6 @@
 Flask>=3.0
 Flask-Cors>=4.0
 holidays>=0.50   # 한국 공휴일 자동 채우기(대체공휴일 포함)
+python-dotenv>=1.0   # .env 파일 로드 (config.py 가 임포트 시 읽음)
+gunicorn>=22.0       # 운영 WSGI 서버 — `gunicorn -c gunicorn.conf.py wsgi:app`
 # Werkzeug(비밀번호 해시)는 Flask 에 포함되어 별도 설치가 필요 없습니다.

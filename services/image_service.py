@@ -16,17 +16,43 @@ from .errors import ApiError
 ALLOWED_EXT = {"png", "jpg", "jpeg", "gif", "webp"}
 MAX_BYTES = 5 * 1024 * 1024  # 5MB
 
+# 확장자는 클라이언트가 마음대로 붙일 수 있으므로 실제 파일 내용(매직 바이트)으로
+# 이미지 형식을 판별하고, 저장 확장자도 판별 결과를 따른다.
+_SIGNATURES = (
+    ("png", lambda d: d.startswith(b"\x89PNG\r\n\x1a\n")),
+    ("jpg", lambda d: d.startswith(b"\xff\xd8\xff")),
+    ("gif", lambda d: d.startswith((b"GIF87a", b"GIF89a"))),
+    ("webp", lambda d: d.startswith(b"RIFF") and d[8:12] == b"WEBP"),
+)
+
+
+def _sniff_ext(data):
+    """내용으로 이미지 형식을 판별해 확장자 반환. 이미지가 아니면 None."""
+    for ext, matches in _SIGNATURES:
+        if matches(data):
+            return ext
+    return None
+
 
 def _facility_dir(slug):
     return os.path.join(config.STATIC_ROOT, slug, "facility")
 
 
 def _url_to_path(url):
-    """/static/... URL 을 실제 파일 경로로. 로컬 static 경로가 아니면 None."""
+    """/static/... URL 을 실제 파일 경로로. 로컬 static 경로가 아니면 None.
+
+    image_url 은 관리자가 자유 문자열로 넣을 수 있으므로 '..' 이 섞이면
+    STATIC_ROOT 밖의 파일을 가리킬 수 있다. 정규화 후 STATIC_ROOT 안에
+    있는지 반드시 확인한다.
+    """
     if not url or not url.startswith("/static/"):
         return None
     rel = url[len("/static/"):].split("?", 1)[0]  # 캐시버스트 쿼리 제거
-    return os.path.join(config.STATIC_ROOT, *rel.split("/"))
+    root = os.path.realpath(config.STATIC_ROOT)
+    path = os.path.realpath(os.path.join(root, *rel.split("/")))
+    if path != root and not path.startswith(root + os.sep):
+        return None  # STATIC_ROOT 밖 -> 취급하지 않음
+    return path
 
 
 def delete_image_file(url):
@@ -48,16 +74,26 @@ def delete_image_file(url):
 
 
 def _read_validated(file_storage):
-    """확장자·용량 검증 후 (bytes, ext) 반환."""
+    """확장자·용량·실제 내용 검증 후 (bytes, ext) 반환.
+
+    반환하는 ext 는 파일명이 아니라 **내용에서 판별한** 형식이다. 확장자만
+    이미지인 파일(예: 스크립트를 .png 로 올리기)을 걸러낸다.
+    """
     filename = secure_filename(file_storage.filename or "")
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if ext not in ALLOWED_EXT:
+    name_ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if name_ext not in ALLOWED_EXT:
         raise ApiError("이미지 파일(png, jpg, jpeg, gif, webp)만 업로드할 수 있습니다.")
-    data = file_storage.read()
+
+    # MAX_BYTES 를 1바이트 넘겨 읽어 초과 여부를 판단(전체를 메모리에 올리지 않음).
+    data = file_storage.read(MAX_BYTES + 1)
     if not data:
         raise ApiError("빈 파일입니다.")
     if len(data) > MAX_BYTES:
         raise ApiError("이미지 용량은 5MB 이하여야 합니다.")
+
+    ext = _sniff_ext(data)
+    if ext is None:
+        raise ApiError("이미지 파일이 아니거나 지원하지 않는 형식입니다. (png, jpg, gif, webp)")
     return data, ext
 
 

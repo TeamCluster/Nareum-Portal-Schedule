@@ -244,8 +244,48 @@ class TestFacilityImage:
                               content_type="multipart/form-data")
         assert r.status_code == 400
 
+    def test_reject_disguised_extension(self, admin_client):
+        """확장자만 .png 인 비이미지 파일은 내용 검사에서 걸러진다."""
+        r = admin_client.post(f"{BASE}/admin/facilities/1/image",
+                              data={"image": (io.BytesIO(b"#!/bin/sh\necho hi\n"), "evil.png")},
+                              content_type="multipart/form-data")
+        assert r.status_code == 400
+
+    def test_stored_extension_follows_content(self, admin_client):
+        """저장 확장자는 파일명이 아니라 실제 형식을 따른다."""
+        r = admin_client.post(f"{BASE}/admin/facilities/1/image",
+                              data={"image": (io.BytesIO(_PNG), "photo.jpeg")},
+                              content_type="multipart/form-data")
+        assert r.status_code == 200
+        assert r.get_json()["image_url"].endswith(".png")
+
+    def test_oversized_request_rejected(self, admin_client):
+        """MAX_CONTENT_LENGTH 초과 요청은 413 + JSON 으로 끊긴다."""
+        import config
+        blob = b"\x89PNG\r\n\x1a\n" + b"0" * (config.MAX_CONTENT_LENGTH + 1024)
+        r = admin_client.post(f"{BASE}/admin/facilities/1/image",
+                              data={"image": (io.BytesIO(blob), "big.png")},
+                              content_type="multipart/form-data")
+        assert r.status_code == 413
+        assert "error" in r.get_json()
+
     def test_requires_login(self, client):
         assert client.post(f"{BASE}/admin/facilities/1/image").status_code == 401
+
+    def test_delete_rejects_path_traversal(self):
+        """image_url 에 '..' 이 섞여도 STATIC_ROOT 밖 파일은 건드리지 않는다."""
+        import os
+        import config
+        from services import image_service
+        outside = os.path.join(os.path.dirname(os.path.realpath(config.STATIC_ROOT)),
+                               "keep-me.txt")
+        with open(outside, "wb") as f:
+            f.write(b"important")
+        try:
+            image_service.delete_image_file("/static/../keep-me.txt")
+            assert os.path.isfile(outside)  # 삭제되지 않아야 함
+        finally:
+            os.remove(outside)
 
     def test_delete_never_touches_shared_default_image(self):
         """delete_image_file 은 static/img/(공유 기본 이미지)를 삭제하지 않는다."""

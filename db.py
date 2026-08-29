@@ -21,6 +21,7 @@ import json
 import os
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 
 from flask import g
@@ -28,6 +29,10 @@ from werkzeug.security import generate_password_hash
 
 import config
 from config import DB_FOLDER, SUPER_DB_PATH, place_db_path
+
+# 쓰기 잠금 대기 시간(초). 워커가 여럿이면 짧은 경합은 흔하므로 즉시
+# "database is locked" 로 실패하지 않고 이만큼 기다린다.
+BUSY_TIMEOUT_SECONDS = 15
 
 
 # ----------------------------------------------------------------------
@@ -60,6 +65,15 @@ CREATE TABLE IF NOT EXISTS super_admin (
 CREATE TABLE IF NOT EXISTS app_settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+
+-- 로그인 시도 제한 카운터 (services/rate_limit.py). key = "<범위>|<IP>".
+-- 워커가 여러 개여도 공유되도록 프로세스 메모리가 아닌 DB 에 둔다.
+CREATE TABLE IF NOT EXISTS login_attempts (
+    key          TEXT PRIMARY KEY,
+    fail_count   INTEGER NOT NULL DEFAULT 0,
+    first_fail   TEXT NOT NULL,
+    locked_until TEXT
 );
 
 -- 공통 휴무일/공휴일 (전 기관 공유). 슈퍼 관리자가 관리.
@@ -160,12 +174,42 @@ CREATE INDEX IF NOT EXISTS idx_block_weekday  ON recurring_blocks(weekday);
 # 커넥션 헬퍼
 # ----------------------------------------------------------------------
 def _connect(path: str) -> sqlite3.Connection:
-    """주어진 경로의 SQLite 에 연결. Flask 컨텍스트 밖에서도 사용 가능."""
+    """주어진 경로의 SQLite 에 연결. Flask 컨텍스트 밖에서도 사용 가능.
+
+    WAL 모드로 열어 읽기와 쓰기가 서로를 막지 않게 한다(gunicorn 워커 여럿에서
+    필수). busy_timeout 이 없으면 짧은 경합에도 바로 "database is locked" 가
+    난다.
+    """
     os.makedirs(DB_FOLDER, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
     return conn
+
+
+@contextmanager
+def write_lock(conn: sqlite3.Connection):
+    """검사 -> 쓰기 를 하나의 쓰기 트랜잭션으로 묶는다.
+
+    `BEGIN IMMEDIATE` 로 쓰기 잠금을 즉시 잡으므로, 두 요청이 동시에
+    "빈 시간이다" 라고 판단한 뒤 둘 다 INSERT 하는 이중 예약을 막는다.
+    블록 안에서는 conn.commit() 을 호출하지 말 것 — 빠져나올 때 커밋된다.
+    """
+    prev = conn.isolation_level
+    conn.isolation_level = None      # 트랜잭션을 직접 제어(대기 중 암시적 커밋)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    else:
+        conn.execute("COMMIT")
+    finally:
+        conn.isolation_level = prev
 
 
 def _get_cached(key: str, path: str) -> sqlite3.Connection:

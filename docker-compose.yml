@@ -1,0 +1,72 @@
+# 시놀로지 Container Manager > 프로젝트 에서 이 파일을 사용한다.
+# 프로젝트 경로는 이 BackEnd 폴더(Dockerfile 이 있는 곳)로 지정한다.
+#
+# ⚠️ 데이터 보존에 관해
+# 코드를 고칠 때마다 '프로젝트 중지 → 빌드 → 재시작' 을 하더라도 아래 volumes 로
+# 연결된 경로의 파일은 그대로 남는다. 예약 DB(super.sqlite3, <기관>.sqlite3)와
+# 업로드 이미지가 여기 있다. 절대 이 경로를 컨테이너 안쪽(예: /app/db)만 두는
+# 형태로 바꾸지 말 것 — 재빌드마다 전부 사라진다.
+#
+# 재배포 후에는 컨테이너 로그 첫 줄에서 이렇게 확인할 수 있다.
+#   [storage] DB_FOLDER   = /app/db
+#   [storage] STATIC_ROOT = /app/static
+# 첫 배포라면 슈퍼 관리자 임시 비밀번호도 로그에 1회만 출력된다. 반드시 받아두고
+# 로그인 후 즉시 변경할 것.
+#
+# ⚠️ .env 파일이 이 폴더에 함께 있어야 한다(.gitignore 라 저장소에는 없다).
+#    .env.example 을 복사해 값을 채운 뒤 File Station 으로 올린다.
+
+services:
+  nareum-backend:
+    build: .
+    image: nr_space-backend:latest
+    container_name: nr_space-backend
+    restart: unless-stopped
+    env_file:
+      # 비밀번호·SECRET_KEY 등 운영값. 이미지에는 굽지 않고 여기서 주입한다.
+      - .env
+    environment:
+      # env_file 보다 environment 가 우선한다. 아래 값들은 컨테이너 배포에서
+      # 반드시 이래야 하는 것들이라 .env 와 무관하게 여기서 고정한다.
+      TZ: Asia/Seoul
+      # 컨테이너 안에서 127.0.0.1 로 묶으면 밖에서 접속할 수 없다. 0.0.0.0 필수.
+      # 포트는 여기 한 곳에서 정하고, 아래 ports·healthcheck 를 같은 숫자로 맞춘다.
+      BIND: "0.0.0.0:5025"
+      # db/ 와 static/ 이 아래 volumes 로 마운트되어 있음을 앱에 알려
+      # "컨테이너 안 + 앱 디렉터리" 부팅 경고를 끈다.
+      STORAGE_PERSISTENT: "true"
+      # scripts/backup.py 스냅샷 위치. 기본값은 컨테이너 안이라 재빌드 시
+      # 사라지므로 마운트된 경로로 돌린다.
+      BACKUP_DIR: /backups
+    ports:
+      # 127.0.0.1 로 묶어 NAS 안에서만 열어둔다. 외부 노출은 DSM 역방향 프록시가
+      # HTTPS 로 처리한다(대상: localhost:8000). 이 앱 자체는 TLS 를 하지 않고,
+      # .env 의 FORCE_HTTPS=true 때문에 평문 직접 접속은 어차피 301 로 튕긴다.
+      # 역방향 프록시가 NAS 의 LAN IP 로 접속하는 구성이라면 "5025:5025" 으로 바꾼다.
+      - "127.0.0.1:5025:5025"
+    volumes:
+      # 왼쪽은 NAS 의 실제 공유 폴더 절대경로로 바꾼다.
+      # 프로젝트 폴더 안(./data)에 두면 프로젝트를 지울 때 함께 사라질 수 있으므로,
+      # 프로젝트 밖 독립된 폴더를 쓰는 편이 안전하다.
+      #   예) /volume3/Nareum/2026Space/db
+      - /volume3/Nareum/2026Space/db:/app/db
+      # 업로드된 시설 사진·기관 헤더 로고. 기본 시설 사진은 첫 실행 때
+      # 엔트리포인트가 이미지 안의 원본에서 채워 넣는다.
+      - /volume3/Nareum/2026Space/static:/app/static
+      # 백업 스냅샷. File Station 에서 바로 내려받을 수 있다.
+      #   수동 실행:  docker exec nareum-backend python scripts/backup.py
+      - /volume3/Nareum/2026Space/backups:/backups
+    healthcheck:
+      # /api/health 는 FORCE_HTTPS 리다이렉트에서 예외라 컨테이너 안 평문 요청으로도 통과한다.
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5025/api/health', timeout=3).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # 첫 부팅은 스키마 생성·시딩을 하므로 조금 여유를 준다.
+      start_period: 20s
+    logging:
+      # 초기 비밀번호와 접속 로그가 쌓이는 곳. NAS 디스크를 채우지 않도록 제한.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

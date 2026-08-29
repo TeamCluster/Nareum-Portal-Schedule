@@ -19,6 +19,21 @@ import re
 # 백엔드 디렉터리의 절대 경로
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
+# --- .env 로드 -----------------------------------------------------------
+# 아래 설정은 전부 os.environ 에서 읽으므로, .env 파일을 쓰려면 여기서 먼저
+# 환경으로 올려야 한다. 이미 셸/systemd 로 넣은 값은 덮어쓰지 않는다.
+# python-dotenv 가 없으면 조용히 건너뛴다(셸 환경변수만으로도 동작).
+#
+# LOAD_DOTENV=0 이면 건너뛴다 — 테스트는 개발자 로컬의 .env(운영값일 수 있음)에
+# 영향을 받으면 안 되므로 conftest 가 이 값을 끈다.
+if os.environ.get("LOAD_DOTENV", "1").strip().lower() not in ("0", "false", "no", "off"):
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        pass
+    else:
+        load_dotenv(os.path.join(BASE_DIR, ".env"), override=False)
+
 # --- SQLite 폴더 / 파일 경로 ---------------------------------------------
 # 테스트/배포에서 DB_FOLDER 환경변수로 위치를 덮어쓸 수 있음.
 DB_FOLDER = os.environ.get("DB_FOLDER") or os.path.join(BASE_DIR, "db")
@@ -66,8 +81,28 @@ CORS_ORIGINS = [
 
 # --- 세션 쿠키 -----------------------------------------------------------
 # 크로스사이트 HTTPS 배포면 SESSION_COOKIE_SAMESITE=None, SESSION_COOKIE_SECURE=true
-SESSION_COOKIE_SAMESITE = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax")
-SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true"
+#
+# SameSite 는 true/false 가 아니라 Strict / Lax / None 셋 중 하나다. 주변 설정이
+# 전부 불리언이라 헷갈리기 쉬운데, 잘못된 값을 넣으면 쿠키를 굽는 시점(=로그인
+# 응답)에야 터져서 "모든 로그인이 500" 이 된다. 부팅 때 바로 잡는다.
+_SAMESITE_CHOICES = {"strict": "Strict", "lax": "Lax", "none": "None"}
+_raw_samesite = os.environ.get("SESSION_COOKIE_SAMESITE", "Lax").strip()
+if _raw_samesite.lower() not in _SAMESITE_CHOICES:
+    raise ValueError(
+        f"SESSION_COOKIE_SAMESITE 값이 잘못되었습니다: {_raw_samesite!r}\n"
+        "  Strict / Lax / None 중 하나여야 합니다 (true/false 아님).\n"
+        "  같은 오리진(프록시 구성)이면 Lax, 프론트·백 도메인이 다르면 None."
+    )
+SESSION_COOKIE_SAMESITE = _SAMESITE_CHOICES[_raw_samesite.lower()]
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "false").strip().lower() == "true"
+
+# SameSite=None 은 브라우저가 Secure 를 요구한다. 둘이 어긋나면 쿠키가 조용히
+# 버려져 "로그인은 성공하는데 계속 로그아웃되는" 증상이 된다.
+if SESSION_COOKIE_SAMESITE == "None" and not SESSION_COOKIE_SECURE:
+    raise ValueError(
+        "SESSION_COOKIE_SAMESITE=None 은 SESSION_COOKIE_SECURE=true 가 필요합니다.\n"
+        "  (브라우저가 Secure 없는 SameSite=None 쿠키를 거부합니다.)"
+    )
 
 
 # --- 전송 구간 보안 (HTTPS/TLS) -----------------------------------------
@@ -90,12 +125,44 @@ FORCE_HTTPS = _env_bool("FORCE_HTTPS", False)
 HSTS_MAX_AGE = int(os.environ.get("HSTS_MAX_AGE", "0"))
 HSTS_INCLUDE_SUBDOMAINS = _env_bool("HSTS_INCLUDE_SUBDOMAINS", False)
 
-# 신뢰하는 리버스 프록시 홉 수. 1 이상이면 ProxyFix 로 X-Forwarded-Proto/Host 를
-# 신뢰해 request.is_secure / Secure 쿠키가 올바로 동작. 프록시가 없으면 0.
+# 신뢰하는 리버스 프록시 홉 수 (X-Forwarded-For 기준). 프록시가 없으면 0.
+#   0  포트포워딩 등 프록시 없음
+#   1  프록시 1대 (시놀로지 역방향 프록시만 / Cloudflare Tunnel)
+#   2  Cloudflare(주황 구름) + 시놀로지 역방향 프록시
+# 이 값은 "실제 클라이언트 IP" 판정에 쓰이며, 로그인 시도 제한이 여기에 의존한다.
 TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS", "0"))
+
+# ⚠️ Proto/Host 는 홉 수가 다르다.
+# nginx(시놀로지 역방향 프록시 포함)는 X-Forwarded-For 는 $proxy_add_x_forwarded_for
+# 로 **누적**하지만, X-Forwarded-Proto/Host 는 $scheme/$host 로 **덮어쓴다**.
+# 그래서 프록시가 2대여도 Proto 헤더 값은 보통 1개다. 여기에 2 를 적용하면
+# ProxyFix 가 값을 못 찾아 request.is_secure 가 False 로 남고,
+# FORCE_HTTPS 와 맞물려 **무한 리다이렉트**가 난다.
+# 특별한 이유가 없으면 기본값(프록시가 있으면 1)을 그대로 두면 된다.
+_default_proto_hops = 1 if TRUSTED_PROXY_HOPS > 0 else 0
+TRUSTED_PROTO_HOPS = int(os.environ.get("TRUSTED_PROTO_HOPS", _default_proto_hops))
+TRUSTED_HOST_HOPS = int(os.environ.get("TRUSTED_HOST_HOPS", _default_proto_hops))
 
 # 공통 보안 응답 헤더 on/off (기본 on — 끌 이유는 거의 없음).
 ENABLE_SECURITY_HEADERS = _env_bool("ENABLE_SECURITY_HEADERS", True)
+
+# --- 스토리지 ------------------------------------------------------------
+# DB_FOLDER / STATIC_ROOT 가 앱 디렉터리 안에 있어도 괜찮은 배포(시놀로지 NAS,
+# VPS, 바인드 마운트한 컨테이너 등)라면 true 로 두어 부팅 경고를 끈다.
+# 경고는 "컨테이너 안 + 앱 디렉터리 안" 일 때만 나오므로 보통은 건드릴 일이 없다.
+STORAGE_PERSISTENT = _env_bool("STORAGE_PERSISTENT", False)
+
+# --- 로그인 시도 제한 (무차별 대입 방어) --------------------------------
+# 같은 IP 가 관측 창(WINDOW) 안에서 MAX 회 실패하면 LOCKOUT 초 동안 잠근다.
+# MAX 를 0 으로 두면 기능이 꺼진다(권장하지 않음).
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", 10))
+LOGIN_WINDOW_SECONDS = int(os.environ.get("LOGIN_WINDOW_SECONDS", 900))    # 15분
+LOGIN_LOCKOUT_SECONDS = int(os.environ.get("LOGIN_LOCKOUT_SECONDS", 900))  # 15분
+
+# --- 업로드 -------------------------------------------------------------
+# 요청 본문 전체의 상한. image_service 의 5MB 검사는 파일을 읽은 뒤에 이뤄지므로,
+# 그보다 앞단에서 거대한 요청 자체를 끊어야 한다(멀티파트 오버헤드분 여유 포함).
+MAX_CONTENT_LENGTH = int(os.environ.get("MAX_CONTENT_LENGTH", 6 * 1024 * 1024))
 
 # --- 예약 도메인 규칙 (프론트와 공유되는 비즈니스 규칙) ------------------
 # 예약 가능 기간: 오늘 + MIN_DAYS ~ 오늘 + MAX_DAYS

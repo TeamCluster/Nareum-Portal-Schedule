@@ -138,13 +138,42 @@ class TestLookupCancel:
         d = r.get_json()
         assert len(d) == 1 and d[0]["status"] == "pending"
 
+    def _own_id(self, client):
+        return client.post(f"{BASE}/reservations/lookup",
+                           json={"name": "홍길동", "contact": "010-1234-5678"}).get_json()[0]["id"]
+
     def test_cancel_frees_slot(self, client):
         self._create(client)
-        rid = client.post(f"{BASE}/reservations/lookup",
-                          json={"name": "홍길동", "contact": "010-1234-5678"}).get_json()[0]["id"]
-        assert client.post(f"{BASE}/reservations/{rid}/cancel").status_code == 200
+        rid = self._own_id(client)
+        r = client.post(f"{BASE}/reservations/{rid}/cancel",
+                        json={"name": "홍길동", "contact": "010-1234-5678"})
+        assert r.status_code == 200
         d = client.get(f"{BASE}/availability?date={valid_date()}").get_json()
         assert d["facilities"][0]["hours"]["10"] == "available"
+
+    def test_cancel_requires_owner_identity(self, client):
+        """본인 확인 없이는 취소 불가 — id 만 알아도 남의 예약을 지울 수 없어야 한다."""
+        self._create(client)
+        rid = self._own_id(client)
+        assert client.post(f"{BASE}/reservations/{rid}/cancel").status_code == 400
+        r = client.post(f"{BASE}/reservations/{rid}/cancel",
+                        json={"name": "임꺽정", "contact": "010-0000-0000"})
+        assert r.status_code == 404
+        # 예약은 그대로 유효해야 한다.
+        assert client.post(f"{BASE}/reservations/lookup",
+                           json={"name": "홍길동", "contact": "010-1234-5678"}
+                           ).get_json()[0]["status"] == "pending"
+
+    def test_cancel_id_enumeration_blocked(self, client):
+        """id 를 훑어 전체 예약을 말소하는 공격이 통하지 않아야 한다."""
+        self._create(client)
+        for probe in range(1, 20):
+            assert client.post(f"{BASE}/reservations/{probe}/cancel",
+                               json={"name": "공격자", "contact": "010-9999-9999"}
+                               ).status_code == 404
+        assert client.post(f"{BASE}/reservations/lookup",
+                           json={"name": "홍길동", "contact": "010-1234-5678"}
+                           ).get_json()[0]["status"] == "pending"
 
 
 class TestTenantIsolation:
@@ -204,6 +233,10 @@ class TestFormConfig:
         assert "음악" in [g["title"] for g in d["equipment_catalog"]]
 
 
+# 공개 취소는 본인 확인(이름+연락처)이 필요하다 — conftest 기본 신청인과 같은 값.
+IDENTITY = {"name": "홍길동", "contact": "010-1234-5678"}
+
+
 class TestCancelDeadline:
     def test_can_cancel_flag_exposed(self, client):
         access_id = client.post(f"{BASE}/reservations",
@@ -217,7 +250,8 @@ class TestCancelDeadline:
         access_id = client.post(f"{BASE}/reservations",
                                 json=reservation_payload()).get_json()["access_id"]
         res_id = client.get(f"{BASE}/reservations/{access_id}").get_json()["id"]
-        assert client.post(f"{BASE}/reservations/{res_id}/cancel").status_code == 200
+        assert client.post(f"{BASE}/reservations/{res_id}/cancel",
+                           json=IDENTITY).status_code == 200
 
     def test_day_before_still_cancellable(self, admin_client):
         """'대관 1일 전까지' 이므로 하루 전날에는 아직 취소할 수 있다."""
@@ -225,7 +259,8 @@ class TestCancelDeadline:
         res_id = admin_client.post(f"{BASE}/admin/reservations",
                                    json=reservation_payload(date=tomorrow)).get_json()["id"]
         assert admin_client.get(f"{BASE}/admin/reservations/{res_id}").get_json()["can_cancel"]
-        assert admin_client.post(f"{BASE}/reservations/{res_id}/cancel").status_code == 200
+        assert admin_client.post(f"{BASE}/reservations/{res_id}/cancel",
+                                 json=IDENTITY).status_code == 200
 
     def test_cancel_after_deadline_blocked(self, admin_client):
         """마감(이용 1일 전)을 지난 당일 예약은 신청자가 직접 취소할 수 없다."""
@@ -234,7 +269,7 @@ class TestCancelDeadline:
                                    json=reservation_payload(date=today)).get_json()["id"]
         d = admin_client.get(f"{BASE}/admin/reservations/{res_id}").get_json()
         assert d["can_cancel"] is False
-        r = admin_client.post(f"{BASE}/reservations/{res_id}/cancel")
+        r = admin_client.post(f"{BASE}/reservations/{res_id}/cancel", json=IDENTITY)
         assert r.status_code == 400 and "직접 취소" in r.get_json()["error"]
 
     def test_admin_can_still_cancel_after_deadline(self, admin_client):
@@ -245,6 +280,34 @@ class TestCancelDeadline:
         r = admin_client.put(f"{BASE}/admin/reservations/{res_id}", json=reservation_payload(
             date=today, status="cancelled"))
         assert r.status_code == 200
+
+
+class TestCancelIdentity:
+    """취소에는 본인 확인이 필요하고(IDOR 방지), 그 위에 마감이 적용된다."""
+
+    def _make(self, client):
+        access_id = client.post(f"{BASE}/reservations",
+                                json=reservation_payload()).get_json()["access_id"]
+        return client.get(f"{BASE}/reservations/{access_id}").get_json()["id"]
+
+    def test_wrong_identity_404(self, client):
+        res_id = self._make(client)
+        r = client.post(f"{BASE}/reservations/{res_id}/cancel",
+                        json={"name": "남의이름", "contact": "010-0000-0000"})
+        assert r.status_code == 404
+
+    def test_missing_identity_400(self, client):
+        res_id = self._make(client)
+        assert client.post(f"{BASE}/reservations/{res_id}/cancel", json={}).status_code == 400
+
+    def test_identity_checked_before_deadline(self, admin_client):
+        """마감이 지난 예약이라도 남의 신원으로는 존재 여부조차 알 수 없다(404)."""
+        from datetime import date as _d
+        res_id = admin_client.post(f"{BASE}/admin/reservations", json=reservation_payload(
+            date=_d.today().isoformat())).get_json()["id"]
+        r = admin_client.post(f"{BASE}/reservations/{res_id}/cancel",
+                              json={"name": "남의이름", "contact": "010-0000-0000"})
+        assert r.status_code == 404
 
 
 class TestPenalty:

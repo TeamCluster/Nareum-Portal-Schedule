@@ -360,7 +360,8 @@ class TestBookingRules:
         admin_client.put(f"{BASE}/admin/booking-rules", json={"cancel_deadline_days": 0})
         rid = admin_client.post(f"{BASE}/admin/reservations", json=reservation_payload(
             date=date.today().isoformat())).get_json()["id"]
-        assert admin_client.post(f"{BASE}/reservations/{rid}/cancel").status_code == 200
+        assert admin_client.post(f"{BASE}/reservations/{rid}/cancel", json={
+            "name": "홍길동", "contact": "010-1234-5678"}).status_code == 200
 
     def test_zero_penalty_disables_block(self, admin_client):
         from datetime import date, timedelta
