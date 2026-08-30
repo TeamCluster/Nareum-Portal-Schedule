@@ -999,6 +999,10 @@ def calendar_events(conn):
         events.append({
             "id": r["id"],
             "title": f"[{fname}] {r['applicant_name']}",
+            # 월간 달력은 title 대신 아래 두 값을 시설명(작게)/신청자명 두 줄로
+            # 나눠 그린다. title 은 툴팁·접근성용으로 그대로 남긴다.
+            "facility_name": fname,
+            "applicant_name": r["applicant_name"],
             "start": r["start_time"],
             "end": r["end_time"],
             "color": "#ff9800" if r["status"] == "pending" else "#4CAF50",
