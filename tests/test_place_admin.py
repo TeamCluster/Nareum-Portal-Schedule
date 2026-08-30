@@ -196,6 +196,25 @@ class TestFacilityCrud:
         assert admin_client.post(f"{BASE}/admin/facilities",
                                  json={"type": "회의실"}).status_code == 400
 
+    def test_listed_in_sort_order_not_id(self, admin_client, app):
+        """표시 순서는 sort_order 가 정한다 — id 는 예약이 참조하므로 건드리지 않는다."""
+        import db as db_module
+        with app.app_context():
+            conn = db_module.get_place_db(SLUG)
+            conn.execute("UPDATE facilities SET sort_order = 99 WHERE id = 1")
+            conn.execute("UPDATE facilities SET sort_order = 1 WHERE id = 3")
+            conn.commit()
+        listed = [f["id"] for f in admin_client.get(f"{BASE}/admin/facilities").get_json()]
+        assert listed[0] == 3 and listed[-1] == 1
+
+    def test_new_facility_goes_last(self, admin_client):
+        """새 시설은 목록 맨 뒤 — sort_order 기본값 0 이면 기존 시설 앞으로 끼어든다."""
+        r = admin_client.post(f"{BASE}/admin/facilities",
+                              json={"name": "새시설", "type": "회의실"})
+        fid = r.get_json()["facility"]["id"]
+        listed = [f["id"] for f in admin_client.get(f"{BASE}/admin/facilities").get_json()]
+        assert listed[-1] == fid
+
 
 class TestFormConfig:
     def test_requires_login(self, client):
@@ -484,3 +503,63 @@ class TestClubShortReservation:
         assert admin_client.post(f"{BASE}/admin/reservations", json=payload).status_code == 201
         assert admin_client.post(f"{BASE}/admin/reservations", json={
             **payload, "club": "블리스", "hours": [15]}).status_code == 400
+
+
+class TestFacilityOrder:
+    """시설 표시 순서 — id 는 예약이 참조하므로 sort_order 만 바꾼다."""
+
+    def _ids(self, admin_client):
+        return [f["id"] for f in admin_client.get(f"{BASE}/admin/facilities").get_json()]
+
+    def _move(self, admin_client, fid, direction):
+        return admin_client.post(f"{BASE}/admin/facilities/{fid}/move",
+                                 json={"direction": direction})
+
+    def test_move_up(self, admin_client):
+        before = self._ids(admin_client)
+        assert self._move(admin_client, before[2], "up").status_code == 200
+        after = self._ids(admin_client)
+        assert after[1] == before[2] and after[2] == before[1]
+        assert sorted(after) == sorted(before)      # 사라지거나 늘어나지 않는다
+
+    def test_move_down(self, admin_client):
+        before = self._ids(admin_client)
+        self._move(admin_client, before[0], "down")
+        after = self._ids(admin_client)
+        assert after[0] == before[1] and after[1] == before[0]
+
+    def test_cannot_move_first_up(self, admin_client):
+        first = self._ids(admin_client)[0]
+        assert self._move(admin_client, first, "up").status_code == 400
+
+    def test_cannot_move_last_down(self, admin_client):
+        last = self._ids(admin_client)[-1]
+        assert self._move(admin_client, last, "down").status_code == 400
+
+    def test_bad_direction(self, admin_client):
+        assert self._move(admin_client, 1, "sideways").status_code == 400
+
+    def test_unknown_facility(self, admin_client):
+        assert self._move(admin_client, 999, "up").status_code == 404
+
+    def test_requires_login(self, client):
+        assert client.post(f"{BASE}/admin/facilities/1/move",
+                           json={"direction": "up"}).status_code == 401
+
+    def test_normalizes_legacy_ties(self, admin_client, app):
+        """예전 데이터는 sort_order 가 모두 0(동률) — 그대로 맞바꾸면 순서가 안 바뀐다."""
+        import db as db_module
+        with app.app_context():
+            conn = db_module.get_place_db(SLUG)
+            conn.execute("UPDATE facilities SET sort_order = 0")
+            conn.commit()
+        before = self._ids(admin_client)          # 동률이면 id 순
+        self._move(admin_client, before[3], "up")
+        after = self._ids(admin_client)
+        assert after[2] == before[3] and after[3] == before[2]
+
+    def test_order_reaches_public_list(self, client, admin_client):
+        before = self._ids(admin_client)
+        self._move(admin_client, before[0], "down")
+        public = [f["id"] for f in client.get(f"{BASE}/facilities").get_json()]
+        assert public[0] == before[1] and public[1] == before[0]

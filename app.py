@@ -739,6 +739,14 @@ def _register_place(app):
             get_place_db(slug), facility_id, request.get_json(silent=True) or {})
         return jsonify({"ok": True, "facility": result})
 
+    @app.post("/api/<slug>/admin/facilities/<int:facility_id>/move")
+    @place_admin_required
+    def place_admin_facility_move(slug, facility_id):
+        """목록 표시 순서를 한 칸 위/아래로. body: {"direction": "up"|"down"}"""
+        d = request.get_json(silent=True) or {}
+        return jsonify(facility_service.move_facility(
+            get_place_db(slug), facility_id, d.get("direction")))
+
     @app.delete("/api/<slug>/admin/facilities/<int:facility_id>")
     @place_admin_required
     def place_admin_facility_delete(slug, facility_id):

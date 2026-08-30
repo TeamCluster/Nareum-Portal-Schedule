@@ -95,7 +95,11 @@ CREATE TABLE IF NOT EXISTS facilities (
     capacity    INTEGER,
     description TEXT,
     image_url   TEXT,
-    created_at  TEXT    NOT NULL
+    created_at  TEXT    NOT NULL,
+    -- 화면에 늘어놓을 순서. id 로 정렬하면 등록한 차례로 고정되는데, 기관이 원하는
+    -- 배치는 그와 다를 수 있다. id 를 다시 매기는 방식은 예약·정기활동이 참조하는
+    -- facility_id 를 함께 고쳐야 해서 위험하므로 표시 순서를 따로 둔다.
+    sort_order  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS reservations (
@@ -341,12 +345,14 @@ def _seed_default_place(super_conn: sqlite3.Connection) -> None:
         # (슈퍼 DB 만 초기화된 경우 중복 시딩 방지).
         existing = pconn.execute("SELECT COUNT(*) AS c FROM facilities").fetchone()["c"]
         if existing == 0:
-            for f in config.DEFAULT_FACILITIES:
+            # sort_order 를 명시해 둔다. 전부 기본값 0 이면 표시 순서가 id 우연에
+            # 기대게 되고, 새 시설의 MAX(sort_order)+1 계산도 어긋난다.
+            for pos, f in enumerate(config.DEFAULT_FACILITIES, start=1):
                 pconn.execute(
-                    "INSERT INTO facilities (name, type, capacity, description, image_url, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO facilities (name, type, capacity, description, image_url,"
+                    " created_at, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (f["name"], f["type"], f.get("capacity"), f.get("description"),
-                     f.get("image_url"), now),
+                     f.get("image_url"), now, pos),
                 )
             pconn.commit()
     finally:
@@ -385,6 +391,12 @@ def init_place_db(slug: str) -> None:
         if "type" not in cols:
             conn.execute("ALTER TABLE closures ADD COLUMN type TEXT NOT NULL DEFAULT 'closure'")
         _migrate_reservation_form_columns(conn)
+        # 레거시 마이그레이션: 표시 순서 컬럼이 없으면 추가하고 현재 순서(=id)로 굳힌다.
+        # 이 분기는 컬럼이 생길 때 한 번만 도므로 나중에 바꾼 순서를 되돌리지 않는다.
+        fac_cols = {r[1] for r in conn.execute("PRAGMA table_info(facilities)").fetchall()}
+        if "sort_order" not in fac_cols:
+            conn.execute("ALTER TABLE facilities ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            conn.execute("UPDATE facilities SET sort_order = id")
         # 레거시 마이그레이션: recurring_blocks 에 유형 컬럼이 없으면 추가.
         blk_cols = {r[1] for r in conn.execute("PRAGMA table_info(recurring_blocks)").fetchall()}
         if "kind" not in blk_cols:
