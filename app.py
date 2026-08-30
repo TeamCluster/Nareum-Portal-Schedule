@@ -659,6 +659,14 @@ def _register_place(app):
         return jsonify(reservation_service.update_recurring_block(
             get_place_db(slug), block_id, request.get_json(silent=True) or {}))
 
+    @app.post("/api/<slug>/admin/recurring-blocks/copy-month")
+    @place_admin_required
+    def place_blocks_copy_month(slug):
+        """한 달치 동아리 정기활동을 다른 달로 복제(매달 재등록 부담을 던다)."""
+        d = request.get_json(silent=True) or {}
+        return jsonify(reservation_service.copy_month_blocks(
+            get_place_db(slug), d.get("from_month"), d.get("to_month")))
+
     @app.delete("/api/<slug>/admin/recurring-blocks/<int:block_id>")
     @place_admin_required
     def place_blocks_delete(slug, block_id):

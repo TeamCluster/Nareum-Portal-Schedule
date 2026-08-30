@@ -162,7 +162,14 @@ CREATE TABLE IF NOT EXISTS recurring_blocks (
     end_hour    INTEGER NOT NULL,
     title       TEXT DEFAULT '',
     -- 활동 유형: club(동아리) | program(센터 프로그램) | etc(점검·외부 정기대관 등)
-    kind        TEXT NOT NULL DEFAULT 'etc'
+    kind        TEXT NOT NULL DEFAULT 'etc',
+    -- 적용 기간(ISO 날짜, 양끝 포함). 빈 문자열이면 그쪽 경계가 없다는 뜻.
+    --   club    : 매달 회의로 정해지므로 해당 월 1일~말일이 들어간다.
+    --   program : 기수 단위라 시작일~종료일이 들어간다.
+    --   etc     : 점검·외부 정기대관 등 — 비워두면 무기한.
+    -- ISO 문자열은 사전순 비교가 곧 시간순 비교라 SQL 에서 그대로 거를 수 있다.
+    effective_from TEXT NOT NULL DEFAULT '',
+    effective_to   TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_block_facility ON recurring_blocks(facility_id);
@@ -382,6 +389,13 @@ def init_place_db(slug: str) -> None:
         blk_cols = {r[1] for r in conn.execute("PRAGMA table_info(recurring_blocks)").fetchall()}
         if "kind" not in blk_cols:
             conn.execute("ALTER TABLE recurring_blocks ADD COLUMN kind TEXT NOT NULL DEFAULT 'etc'")
+        # 레거시 마이그레이션: 적용 기간 컬럼이 없으면 추가. 기본값 '' 는 경계 없음
+        # (= 지금까지의 무기한 동작)이라 기존 행의 의미가 바뀌지 않는다.
+        for col in ("effective_from", "effective_to"):
+            if col not in blk_cols:
+                conn.execute(
+                    f"ALTER TABLE recurring_blocks ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"
+                )
         for wd in range(7):
             conn.execute(
                 "INSERT OR IGNORE INTO operating_hours (weekday, is_open, open_hour, close_hour)"

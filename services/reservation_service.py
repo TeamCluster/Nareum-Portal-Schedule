@@ -371,15 +371,112 @@ def day_config(conn, target_date):
 # ----------------------------------------------------------------------
 # 정기 고정활동 (recurring_blocks)
 # ----------------------------------------------------------------------
-def list_recurring_blocks(conn):
+def _month_bounds(month_str):
+    """'YYYY-MM' → (1일, 말일) ISO 날짜 문자열."""
+    try:
+        year, month = (int(part) for part in str(month_str).strip().split("-"))
+        first = date(year, month, 1)
+    except (ValueError, TypeError, AttributeError):
+        raise ApiError("적용 월을 YYYY-MM 형식으로 선택해주세요.")
+    last = date(year, month, calendar.monthrange(year, month)[1])
+    return first.isoformat(), last.isoformat()
+
+
+def _whole_month(effective_from, effective_to):
+    """기간이 어느 한 달과 정확히 일치하면 'YYYY-MM', 아니면 ''.
+
+    동아리 일정은 월 단위로 입력받아 1일~말일로 펴서 저장한다. 목록/수정 화면이
+    다시 '월' 선택으로 되돌리려면 이 역변환이 필요하다(월 컬럼을 따로 두면
+    기간 컬럼과 어긋날 수 있어 저장은 기간 하나로만 한다).
+    """
+    if not (effective_from and effective_to):
+        return ""
+    try:
+        start = datetime.strptime(effective_from, "%Y-%m-%d").date()
+        end = datetime.strptime(effective_to, "%Y-%m-%d").date()
+    except ValueError:
+        return ""
+    if start.day != 1 or (start.year, start.month) != (end.year, end.month):
+        return ""
+    if end.day != calendar.monthrange(end.year, end.month)[1]:
+        return ""
+    return f"{start.year:04d}-{start.month:02d}"
+
+
+def _period_status(effective_from, effective_to, today=None):
+    """오늘 기준 진행 상태 — 'upcoming' | 'active' | 'ended'."""
+    today = (today or date.today()).isoformat()
+    if effective_from and effective_from > today:
+        return "upcoming"
+    if effective_to and effective_to < today:
+        return "ended"
+    return "active"
+
+
+def _period_label(effective_from, effective_to):
+    month = _whole_month(effective_from, effective_to)
+    if month:
+        year, mm = month.split("-")
+        return f"{year}년 {int(mm)}월"
+    if effective_from and effective_to:
+        return f"{effective_from} ~ {effective_to}"
+    if effective_from:
+        return f"{effective_from} ~"
+    if effective_to:
+        return f"~ {effective_to}"
+    return "기간 제한 없음"
+
+
+def list_recurring_blocks(conn, today=None):
     rows = conn.execute(
         "SELECT r.id, r.facility_id, r.weekday, r.start_hour, r.end_hour, r.title, r.kind,"
-        " f.name AS facility_name"
+        " r.effective_from, r.effective_to, f.name AS facility_name"
         " FROM recurring_blocks r LEFT JOIN facilities f ON f.id = r.facility_id"
         " ORDER BY r.weekday, r.start_hour"
     ).fetchall()
-    return [{**dict(r), "kind_label": config.RECURRING_KIND_LABELS.get(r["kind"], "기타")}
-            for r in rows]
+    blocks = []
+    for r in rows:
+        eff_from, eff_to = r["effective_from"] or "", r["effective_to"] or ""
+        blocks.append({
+            **dict(r),
+            "effective_from": eff_from,
+            "effective_to": eff_to,
+            "kind_label": config.RECURRING_KIND_LABELS.get(r["kind"], "기타"),
+            "month": _whole_month(eff_from, eff_to),
+            "status": _period_status(eff_from, eff_to, today),
+            "period_label": _period_label(eff_from, eff_to),
+        })
+    # 끝난 일정은 목록 아래로 — 매달 갱신하는 동아리 일정이 쌓여도 지금 살아 있는
+    # 것부터 보이게 한다. 같은 상태 안에서는 기존 순서(요일·시작시각)를 유지한다.
+    order = {"active": 0, "upcoming": 1, "ended": 2}
+    blocks.sort(key=lambda b: order[b["status"]])
+    return blocks
+
+
+def _parse_period(kind, data):
+    """유형별 적용 기간 입력 → (effective_from, effective_to). '' 는 경계 없음.
+
+    유형마다 기간이 정해지는 방식이 달라 입력 형태도 다르게 받는다.
+      club    매달 회의로 그 달치를 정하므로 월(YYYY-MM) 하나만 받아 1일~말일로 편다.
+      program 기수마다 시작일·종료일이 정해져 있어 두 날짜를 모두 받는다.
+      etc     점검·외부 정기대관 등 — 비워두면 무기한(기존 동작).
+    """
+    if kind == "club":
+        return _month_bounds(data.get("month"))
+
+    start = (data.get("start_date") or "").strip()
+    end = (data.get("end_date") or "").strip()
+    if kind == "program" and not (start and end):
+        raise ApiError("프로그램 정기활동은 시작일과 종료일을 모두 입력해주세요.")
+    for label, value in (("시작일", start), ("종료일", end)):
+        if value:
+            try:
+                datetime.strptime(value, "%Y-%m-%d")
+            except ValueError:
+                raise ApiError(f"{label} 형식이 올바르지 않습니다. (YYYY-MM-DD)")
+    if start and end and start > end:
+        raise ApiError("종료일은 시작일과 같거나 뒤여야 합니다.")
+    return start, end
 
 
 def _parse_recurring_block(conn, data):
@@ -388,6 +485,8 @@ def _parse_recurring_block(conn, data):
     동아리 정기활동뿐 아니라 센터 프로그램·시설 점검·외부 정기대관도 들어오므로
     유형(kind)을 함께 받는다. 활동명은 현황표에 그대로 표시되어 없으면 무슨 일정인지
     알 수 없으므로 필수.
+
+    유형에 따라 적용 기간도 함께 받는다(_parse_period).
     """
     facility_id = data.get("facility_id")
     if not facility_id or facility_service.get_facility(conn, facility_id) is None:
@@ -413,14 +512,17 @@ def _parse_recurring_block(conn, data):
         hint = {"club": "동아리명", "program": "프로그램명"}.get(kind, "활동명")
         raise ApiError(f"{label} 정기활동의 {hint}을(를) 입력해주세요.")
 
-    return facility_id, weekday, start_hour, end_hour, title, kind
+    effective_from, effective_to = _parse_period(kind, data)
+
+    return (facility_id, weekday, start_hour, end_hour, title, kind,
+            effective_from, effective_to)
 
 
 def add_recurring_block(conn, data):
     values = _parse_recurring_block(conn, data)
     cur = conn.execute(
-        "INSERT INTO recurring_blocks (facility_id, weekday, start_hour, end_hour, title, kind)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO recurring_blocks (facility_id, weekday, start_hour, end_hour, title, kind,"
+        " effective_from, effective_to) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         values,
     )
     conn.commit()
@@ -428,19 +530,77 @@ def add_recurring_block(conn, data):
 
 
 def update_recurring_block(conn, block_id, data):
-    """등록된 정기활동 수정 — 학기마다 시간·담당이 바뀌는 경우가 잦다."""
+    """등록된 정기활동 수정 — 시간·담당뿐 아니라 적용 기간도 자주 바뀐다."""
     if conn.execute(
         "SELECT 1 FROM recurring_blocks WHERE id = ?", (block_id,)
     ).fetchone() is None:
         raise ApiError("정기활동을 찾을 수 없습니다.", 404)
-    facility_id, weekday, start_hour, end_hour, title, kind = _parse_recurring_block(conn, data)
+    values = _parse_recurring_block(conn, data)
     conn.execute(
         "UPDATE recurring_blocks SET facility_id = ?, weekday = ?, start_hour = ?,"
-        " end_hour = ?, title = ?, kind = ? WHERE id = ?",
-        (facility_id, weekday, start_hour, end_hour, title, kind, block_id),
+        " end_hour = ?, title = ?, kind = ?, effective_from = ?, effective_to = ?"
+        " WHERE id = ?",
+        (*values, block_id),
     )
     conn.commit()
     return {"ok": True}
+
+
+def copy_month_blocks(conn, from_month, to_month):
+    """한 달치 동아리 정기활동을 통째로 다른 달로 복제.
+
+    동아리 일정은 매달 회의로 다시 정해지므로 달마다 같은 표를 손으로 다시 등록해야
+    한다. 지난달 표를 그대로 옮겨두고 바뀐 것만 고치도록 하기 위한 기능.
+
+    복제 대상은 동아리(club) 중 적용 기간이 from_month 한 달과 정확히 일치하는 것만.
+    프로그램은 기수마다 기간이 따로 정해지고, 기타는 보통 무기한이라 달 단위로 옮길
+    대상이 아니다.
+
+    같은 내용(시설·요일·시간·활동명)이 이미 대상 달에 있으면 건너뛴다 — 버튼을 두 번
+    눌러도 중복이 쌓이지 않아야 한다.
+    """
+    src_from, src_to = _month_bounds(from_month)
+    dst_from, dst_to = _month_bounds(to_month)
+    if src_from == dst_from:
+        raise ApiError("복제할 달과 붙여넣을 달이 같습니다.")
+
+    rows = conn.execute(
+        "SELECT facility_id, weekday, start_hour, end_hour, title, kind"
+        " FROM recurring_blocks"
+        " WHERE kind = 'club' AND effective_from = ? AND effective_to = ?"
+        " ORDER BY weekday, start_hour",
+        (src_from, src_to),
+    ).fetchall()
+    if not rows:
+        raise ApiError(f"{from_month} 에 등록된 동아리 정기활동이 없습니다.")
+
+    copied = skipped = 0
+    # 중복 검사와 INSERT 를 한 트랜잭션에 묶는다(버튼 연타 / 두 탭 동시 클릭 대비).
+    with write_lock(conn):
+        for r in rows:
+            already = conn.execute(
+                "SELECT 1 FROM recurring_blocks"
+                " WHERE facility_id = ? AND weekday = ? AND start_hour = ? AND end_hour = ?"
+                "   AND title = ? AND effective_from = ? AND effective_to = ?",
+                (r["facility_id"], r["weekday"], r["start_hour"], r["end_hour"],
+                 r["title"], dst_from, dst_to),
+            ).fetchone()
+            if already:
+                skipped += 1
+                continue
+            conn.execute(
+                "INSERT INTO recurring_blocks (facility_id, weekday, start_hour, end_hour,"
+                " title, kind, effective_from, effective_to)"
+                " VALUES (?, ?, ?, ?, ?, 'club', ?, ?)",
+                (r["facility_id"], r["weekday"], r["start_hour"], r["end_hour"],
+                 r["title"], dst_from, dst_to),
+            )
+            copied += 1
+
+    message = f"{to_month} 로 {copied}건을 복제했습니다."
+    if skipped:
+        message += f" (이미 있어 건너뜀 {skipped}건)"
+    return {"ok": True, "copied": copied, "skipped": skipped, "message": message}
 
 
 def delete_recurring_block(conn, block_id):
@@ -451,11 +611,24 @@ def delete_recurring_block(conn, block_id):
     return {"ok": True}
 
 
-def _blocks_for(conn, facility_id, weekday):
+# 적용 기간 필터 — 빈 문자열은 그쪽 경계가 없다는 뜻이라 항상 통과시킨다.
+# ISO 날짜는 사전순 비교가 곧 시간순 비교라 SQL 에서 문자열로 그대로 비교한다.
+_IN_PERIOD_SQL = ("   AND (effective_from = '' OR effective_from <= ?)"
+                  "   AND (effective_to   = '' OR effective_to   >= ?)")
+
+
+def _blocks_for(conn, facility_id, on_date):
+    """해당 시설에서 on_date 에 실제로 적용되는 정기활동.
+
+    요일이 같아도 적용 기간을 벗어난 일정(지난달 동아리 일정, 끝난 프로그램)은
+    더 이상 시간을 막지 않아야 하므로 날짜로 함께 거른다.
+    """
+    ds = on_date.isoformat()
     return conn.execute(
         "SELECT start_hour, end_hour, title, kind FROM recurring_blocks"
-        " WHERE facility_id = ? AND weekday = ? ORDER BY start_hour",
-        (facility_id, weekday),
+        " WHERE facility_id = ? AND weekday = ?" + _IN_PERIOD_SQL +
+        " ORDER BY start_hour",
+        (facility_id, on_date.weekday(), ds, ds),
     ).fetchall()
 
 
@@ -620,9 +793,9 @@ def booked_hours_for(conn, facility_id, target_date, exclude_res_id=None, includ
 
 
 def block_hours_for(conn, facility_id, target_date):
-    """해당 시설/날짜(요일)의 정기 고정활동 점유 시각(int) 집합."""
+    """해당 시설/날짜의 정기 고정활동 점유 시각(int) 집합 (적용 기간 반영)."""
     hours = set()
-    for b in _blocks_for(conn, facility_id, target_date.weekday()):
+    for b in _blocks_for(conn, facility_id, target_date):
         hours.update(range(b["start_hour"], b["end_hour"]))
     return hours
 
@@ -640,11 +813,17 @@ def has_overlap(conn, facility_id, start_iso, end_iso, exclude_res_id=None):
     return conn.execute(sql, params).fetchone() is not None
 
 
-def has_block_overlap(conn, facility_id, weekday, start_hour, end_hour):
+def has_block_overlap(conn, facility_id, on_date, start_hour, end_hour):
+    """on_date 에 적용 중인 정기활동과 [start_hour, end_hour) 가 겹치는가.
+
+    요일이 아니라 날짜를 받는다 — 적용 기간을 벗어난 일정은 겹쳐도 막지 않는다.
+    """
+    ds = on_date.isoformat()
     return conn.execute(
         "SELECT 1 FROM recurring_blocks"
-        " WHERE facility_id = ? AND weekday = ? AND start_hour < ? AND end_hour > ?",
-        (facility_id, weekday, end_hour, start_hour),
+        " WHERE facility_id = ? AND weekday = ? AND start_hour < ? AND end_hour > ?"
+        + _IN_PERIOD_SQL,
+        (facility_id, on_date.weekday(), end_hour, start_hour, ds, ds),
     ).fetchone() is not None
 
 
@@ -843,7 +1022,7 @@ def create_public_reservation(conn, data):
     with write_lock(conn):
         if has_overlap(conn, facility_id, start_iso, end_iso):
             raise ApiError("선택하신 시간에 이미 다른 예약이 진행 중입니다.")
-        if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
+        if has_block_overlap(conn, facility_id, target_date, start_hour, end_hour):
             raise ApiError("선택하신 시간은 정기 고정활동이 있어 예약할 수 없습니다.")
         conn.execute(
             "INSERT INTO reservations"
@@ -1062,7 +1241,7 @@ def day_grid(conn, date_str=None):
         # 시간 단위 점유를 만든다. 정기활동을 먼저 채우고 예약으로 덮어써서
         # 겹치는 구간에서 예약(임의 예약건)이 우선하여 보이도록 한다.
         cell = {}  # hour -> {"key":..., "type":..., ...}
-        for i, b in enumerate(_blocks_for(conn, f["id"], target.weekday())):
+        for i, b in enumerate(_blocks_for(conn, f["id"], target)):
             for h in range(max(b["start_hour"], open_h), min(b["end_hour"], close_h)):
                 cell[h] = {"key": f"blk-{i}", "type": "block",
                            "title": b["title"] or "정기활동", "kind": b["kind"] or "etc"}
@@ -1148,7 +1327,7 @@ def create_admin_reservation(conn, data):
     warnings = []
     if not cfg["is_open"]:
         warnings.append(f"휴무일({cfg['closed_reason']})에 예약을 추가했습니다.")
-    if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
+    if has_block_overlap(conn, facility_id, target_date, start_hour, end_hour):
         warnings.append("정기 고정활동과 겹치는 시간에 예약을 추가했습니다.")
 
     access_id = str(uuid.uuid4())
@@ -1199,7 +1378,7 @@ def update_reservation(conn, res_id, data):
     warnings = []
     if not cfg["is_open"]:
         warnings.append(f"휴무일({cfg['closed_reason']})로 지정된 날짜입니다.")
-    if has_block_overlap(conn, facility_id, target_date.weekday(), start_hour, end_hour):
+    if has_block_overlap(conn, facility_id, target_date, start_hour, end_hour):
         warnings.append("정기 고정활동과 겹치는 시간입니다.")
 
     new_status = data.get("status")
@@ -1303,7 +1482,7 @@ def extend(conn, res_id):
         if has_overlap(conn, row["facility_id"], row["end_time"], new_end_iso,
                        exclude_res_id=res_id):
             raise ApiError("뒤이은 시간에 다른 대관예약이 있어 연장할 수 없습니다.")
-        if has_block_overlap(conn, row["facility_id"], target_date.weekday(),
+        if has_block_overlap(conn, row["facility_id"], target_date,
                              end_dt.hour, end_dt.hour + hours):
             raise ApiError("뒤이은 시간에 정기 고정활동이 있어 연장할 수 없습니다.")
         conn.execute("UPDATE reservations SET end_time = ? WHERE id = ?", (new_end_iso, res_id))

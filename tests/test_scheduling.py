@@ -15,6 +15,28 @@ def date_with_weekday(wd, min_offset=3):
     return d
 
 
+def month_of(d):
+    """date → 'YYYY-MM' (동아리 정기활동의 적용 월)."""
+    return f"{d.year:04d}-{d.month:02d}"
+
+
+def block_payload(**over):
+    """정기활동 등록 payload — 유형별 기간 키를 모두 담아 둔다.
+
+    서버는 kind 에 따라 club 이면 month 만, program/etc 면 start_date·end_date 만
+    보므로 한 payload 에 다 넣어도 안전하다. 기본 기간은 넉넉히 잡아
+    date_with_weekday() 가 다음 달로 넘어가도 덮이게 한다.
+    """
+    today = date.today()
+    payload = {"facility_id": 1, "weekday": 1, "start_hour": 10, "end_hour": 12,
+               "title": "밴드 정기연습", "kind": "etc",
+               "month": month_of(today),
+               "start_date": today.isoformat(),
+               "end_date": (today + timedelta(days=120)).isoformat()}
+    payload.update(over)
+    return payload
+
+
 def default_hours():
     return [{"weekday": wd, "is_open": True, "open_hour": 9, "close_hour": 18} for wd in range(7)]
 
@@ -113,8 +135,8 @@ class TestRecurringBlocks:
 
     def test_list_and_delete(self, admin_client):
         admin_client.post(f"{BASE}/admin/recurring-blocks",
-                          json={"facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 16,
-                                "title": "목요 프로그램", "kind": "program"})
+                          json=block_payload(weekday=3, start_hour=15, end_hour=16,
+                                             title="목요 프로그램", kind="program"))
         blocks = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"]
         assert len(blocks) == 1 and blocks[0]["facility_name"]
         bid = blocks[0]["id"]
@@ -170,8 +192,8 @@ class TestAdminBypass:
         wd = 1
         tue = date_with_weekday(wd).isoformat()
         admin_client.post(f"{BASE}/admin/recurring-blocks",
-                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12,
-                                "title": "밴드 정기연습", "kind": "club"})
+                          json=block_payload(weekday=wd, kind="club",
+                                             month=month_of(date_with_weekday(wd))))
         r = admin_client.post(f"{BASE}/admin/reservations",
                               json=reservation_payload(date=tue, facility_id=1, hours=[10, 11]))
         assert r.status_code == 201
@@ -190,8 +212,8 @@ class TestAdminBypass:
         wd = 1
         tue = date_with_weekday(wd).isoformat()
         admin_client.post(f"{BASE}/admin/recurring-blocks",
-                          json={"facility_id": 1, "weekday": wd, "start_hour": 10, "end_hour": 12,
-                                "title": "밴드 정기연습", "kind": "club"})
+                          json=block_payload(weekday=wd, kind="club",
+                                             month=month_of(date_with_weekday(wd))))
         d = admin_client.get(f"{BASE}/admin/booked-times?facility_id=1&date={tue}").get_json()
         assert d["reserved"] == [] and d["blocked"] == [10, 11]
 
@@ -305,10 +327,10 @@ class TestRecurringBlockKinds:
     """정기 고정활동은 동아리 정기활동 외에 프로그램·점검 등도 담는다."""
 
     def _add(self, admin_client, **over):
-        payload = {"facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 17,
-                   "title": "방송댄스반", "kind": "program"}
-        payload.update(over)
-        return admin_client.post(f"{BASE}/admin/recurring-blocks", json=payload)
+        defaults = dict(weekday=3, start_hour=15, end_hour=17,
+                        title="방송댄스반", kind="program")
+        return admin_client.post(f"{BASE}/admin/recurring-blocks",
+                                 json=block_payload(**{**defaults, **over}))
 
     def test_kind_stored_with_label(self, admin_client):
         assert self._add(admin_client).status_code == 201
@@ -338,9 +360,10 @@ class TestRecurringBlockKinds:
 
     def test_kind_reaches_day_grid(self, admin_client):
         wd = 2
-        wed = date_with_weekday(wd).isoformat()
+        wed_date = date_with_weekday(wd)
+        wed = wed_date.isoformat()
         self._add(admin_client, weekday=wd, start_hour=14, end_hour=16,
-                  kind="club", title="하이라이트")
+                  kind="club", title="하이라이트", month=month_of(wed_date))
         grid = admin_client.get(f"{BASE}/admin/day-grid?date={wed}").get_json()
         fac = next(f for f in grid["facilities"] if f["id"] == 1)
         seg = next(s for s in fac["segments"] if s["type"] == "block")
@@ -348,9 +371,9 @@ class TestRecurringBlockKinds:
 
     def test_update(self, admin_client):
         bid = self._add(admin_client).get_json()["id"]
-        r = admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}", json={
-            "facility_id": 2, "weekday": 4, "start_hour": 10, "end_hour": 12,
-            "title": "하이라이트", "kind": "club"})
+        r = admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}", json=block_payload(
+            facility_id=2, weekday=4, start_hour=10, end_hour=12,
+            title="하이라이트", kind="club"))
         assert r.status_code == 200
         b = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"][0]
         assert (b["facility_id"], b["weekday"], b["start_hour"], b["end_hour"]) == (2, 4, 10, 12)
@@ -358,14 +381,254 @@ class TestRecurringBlockKinds:
 
     def test_update_validates(self, admin_client):
         bid = self._add(admin_client).get_json()["id"]
-        assert admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}", json={
-            "facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 17,
-            "title": "", "kind": "program"}).status_code == 400
+        assert admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}", json=block_payload(
+            weekday=3, start_hour=15, end_hour=17, title="", kind="program")).status_code == 400
 
     def test_update_unknown(self, admin_client):
-        assert admin_client.put(f"{BASE}/admin/recurring-blocks/999", json={
-            "facility_id": 1, "weekday": 3, "start_hour": 15, "end_hour": 17,
-            "title": "x", "kind": "etc"}).status_code == 404
+        assert admin_client.put(f"{BASE}/admin/recurring-blocks/999", json=block_payload(
+            weekday=3, start_hour=15, end_hour=17, title="x", kind="etc")).status_code == 404
 
     def test_update_requires_login(self, client):
         assert client.put(f"{BASE}/admin/recurring-blocks/1", json={}).status_code == 401
+
+
+class TestRecurringBlockPeriod:
+    """정기활동은 유형마다 적용 기간이 다르다.
+
+    동아리는 매달 회의로 그 달치를 정하고(월 단위), 프로그램은 기수마다 시작일·
+    종료일이 정해진다. 기간을 벗어난 일정은 요일이 같아도 더 이상 시간을 막지 않아야
+    한다 — 지난달 동아리 일정이 이번 달 예약을 막으면 안 된다.
+    """
+
+    def _post(self, admin_client, **over):
+        return admin_client.post(f"{BASE}/admin/recurring-blocks", json=block_payload(**over))
+
+    def _only(self, admin_client):
+        return admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"][0]
+
+    # --- 월(동아리) → 1일~말일 -------------------------------------------
+    def test_club_month_expands_to_whole_month(self, admin_client):
+        assert self._post(admin_client, kind="club", month="2026-02").status_code == 201
+        b = self._only(admin_client)
+        assert b["effective_from"] == "2026-02-01" and b["effective_to"] == "2026-02-28"
+        # 월 선택으로 되돌릴 수 있어야 수정 화면이 원래 입력을 복원한다.
+        assert b["month"] == "2026-02" and b["period_label"] == "2026년 2월"
+
+    def test_club_month_handles_31_day_month(self, admin_client):
+        self._post(admin_client, kind="club", month="2026-01")
+        assert self._only(admin_client)["effective_to"] == "2026-01-31"
+
+    def test_club_month_required(self, admin_client):
+        r = self._post(admin_client, kind="club", month="")
+        assert r.status_code == 400 and "월" in r.get_json()["error"]
+
+    def test_club_month_format_checked(self, admin_client):
+        assert self._post(admin_client, kind="club", month="2026년 2월").status_code == 400
+
+    # --- 시작·종료일(프로그램) -------------------------------------------
+    def test_program_requires_both_dates(self, admin_client):
+        r = self._post(admin_client, kind="program", start_date="2026-03-02", end_date="")
+        assert r.status_code == 400 and "종료일" in r.get_json()["error"]
+
+    def test_program_rejects_reversed_range(self, admin_client):
+        r = self._post(admin_client, kind="program",
+                       start_date="2026-05-01", end_date="2026-04-01")
+        assert r.status_code == 400
+
+    def test_program_keeps_given_range(self, admin_client):
+        self._post(admin_client, kind="program",
+                   start_date="2026-03-02", end_date="2026-06-30")
+        b = self._only(admin_client)
+        assert (b["effective_from"], b["effective_to"]) == ("2026-03-02", "2026-06-30")
+        # 한 달과 정확히 겹치지 않으므로 월 표기로 접히면 안 된다.
+        assert b["month"] == "" and b["period_label"] == "2026-03-02 ~ 2026-06-30"
+
+    # --- 기타: 비우면 무기한 (기존 동작 유지) ------------------------------
+    def test_etc_without_dates_is_open_ended(self, admin_client):
+        assert self._post(admin_client, kind="etc",
+                          start_date="", end_date="").status_code == 201
+        b = self._only(admin_client)
+        assert (b["effective_from"], b["effective_to"]) == ("", "")
+        assert b["period_label"] == "기간 제한 없음" and b["status"] == "active"
+
+    # --- 실제 점유: 기간 밖이면 막지 않는다 -------------------------------
+    def test_expired_block_does_not_block_booking(self, client, admin_client):
+        wd = 1
+        tue = date_with_weekday(wd)
+        last_month = (tue.replace(day=1) - timedelta(days=1))
+        # 지난달로 끝난 동아리 일정 — 요일·시간은 그대로 겹친다.
+        self._post(admin_client, weekday=wd, kind="club", month=month_of(last_month))
+        assert client.get(
+            f"{BASE}/facilities/1/booked-times?date={tue.isoformat()}").get_json() == []
+        r = client.post(f"{BASE}/reservations",
+                        json=reservation_payload(date=tue.isoformat(), facility_id=1, hours=[10, 11]))
+        assert r.status_code == 201
+
+    def test_active_month_block_still_blocks(self, client, admin_client):
+        wd = 1
+        tue = date_with_weekday(wd)
+        self._post(admin_client, weekday=wd, kind="club", month=month_of(tue))
+        assert 10 in client.get(
+            f"{BASE}/facilities/1/booked-times?date={tue.isoformat()}").get_json()
+        r = client.post(f"{BASE}/reservations",
+                        json=reservation_payload(date=tue.isoformat(), facility_id=1, hours=[10]))
+        assert r.status_code == 400 and "정기" in r.get_json()["error"]
+
+    def test_program_outside_range_does_not_block(self, client, admin_client):
+        wd = 2
+        wed = date_with_weekday(wd)
+        # 대상 날짜 하루 전에 끝나는 프로그램
+        self._post(admin_client, weekday=wd, kind="program",
+                   start_date=(wed - timedelta(days=30)).isoformat(),
+                   end_date=(wed - timedelta(days=1)).isoformat())
+        r = client.post(f"{BASE}/reservations",
+                        json=reservation_payload(date=wed.isoformat(), facility_id=1, hours=[10]))
+        assert r.status_code == 201
+
+    def test_upcoming_block_does_not_block_dates_before_its_period(self, client, admin_client):
+        """'예정'이라서가 아니라 날짜가 기간 밖이라서 안 막는다 (위 테스트와 짝)."""
+        wd = 3
+        thu = date_with_weekday(wd)
+        next_month = (thu.replace(day=28) + timedelta(days=7))
+        self._post(admin_client, weekday=wd, kind="club", month=month_of(next_month))
+        r = client.post(f"{BASE}/reservations",
+                        json=reservation_payload(date=thu.isoformat(), facility_id=1, hours=[10]))
+        assert r.status_code == 201
+        assert self._only(admin_client)["status"] == "upcoming"
+
+    def test_upcoming_block_already_applies_inside_its_period(self, client, admin_client):
+        """'예정'은 표시용 상태일 뿐 — 그 기간 안의 날짜는 지금도 막는다.
+
+        다음 달 예약을 이번 달에 받으므로, 다음 달 동아리 일정이 '아직 시작 전'이라는
+        이유로 뚫리면 안 된다. 기간 판정은 오늘이 아니라 '예약하려는 날짜' 기준이다.
+        """
+        wd = 1
+        today = date.today()
+        next_first = (today.replace(day=28) + timedelta(days=7)).replace(day=1)
+        d = next_first
+        while d.weekday() != wd:
+            d += timedelta(days=1)
+        if (d - today).days < 3:      # 예약창 최소 기한에 걸리지 않게 한 주 뒤로
+            d += timedelta(days=7)
+
+        self._post(admin_client, weekday=wd, kind="club", month=month_of(d))
+        assert self._only(admin_client)["status"] == "upcoming"   # 목록에선 '예정'
+
+        assert 10 in client.get(
+            f"{BASE}/facilities/1/booked-times?date={d.isoformat()}").get_json()
+        r = client.post(f"{BASE}/reservations",
+                        json=reservation_payload(date=d.isoformat(), facility_id=1, hours=[10]))
+        assert r.status_code == 400 and "정기" in r.get_json()["error"]
+
+    def test_expired_block_hidden_from_day_grid(self, admin_client):
+        wd = 2
+        wed = date_with_weekday(wd)
+        last_month = (wed.replace(day=1) - timedelta(days=1))
+        self._post(admin_client, weekday=wd, kind="club", month=month_of(last_month))
+        grid = admin_client.get(f"{BASE}/admin/day-grid?date={wed.isoformat()}").get_json()
+        fac = next(f for f in grid["facilities"] if f["id"] == 1)
+        assert [s for s in fac["segments"] if s["type"] == "block"] == []
+
+    # --- 목록: 끝난 일정은 아래로 -----------------------------------------
+    def test_ended_blocks_sort_last(self, admin_client):
+        today = date.today()
+        last_month = today.replace(day=1) - timedelta(days=1)
+        self._post(admin_client, weekday=0, kind="club", title="지난달",
+                   month=month_of(last_month))
+        self._post(admin_client, weekday=6, kind="club", title="이번달",
+                   month=month_of(today))
+        blocks = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"]
+        assert [b["title"] for b in blocks] == ["이번달", "지난달"]
+        assert [b["status"] for b in blocks] == ["active", "ended"]
+
+    # --- 수정으로 기간만 바꾸기 -------------------------------------------
+    def test_update_moves_period_to_next_month(self, admin_client):
+        bid = self._post(admin_client, kind="club", month="2026-03").get_json()["id"]
+        r = admin_client.put(f"{BASE}/admin/recurring-blocks/{bid}",
+                             json=block_payload(kind="club", month="2026-04"))
+        assert r.status_code == 200
+        b = self._only(admin_client)
+        assert (b["effective_from"], b["effective_to"]) == ("2026-04-01", "2026-04-30")
+
+
+class TestCopyMonthBlocks:
+    """동아리 정기활동은 매달 다시 등록해야 한다 — 한 달치를 통째로 다음 달로 복제."""
+
+    URL = f"{BASE}/admin/recurring-blocks/copy-month"
+
+    def _club(self, admin_client, month, **over):
+        return admin_client.post(f"{BASE}/admin/recurring-blocks",
+                                 json=block_payload(kind="club", month=month, **over))
+
+    def _titles(self, admin_client, month):
+        blocks = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"]
+        return sorted(b["title"] for b in blocks if b["month"] == month)
+
+    def test_copies_all_club_blocks(self, admin_client):
+        self._club(admin_client, "2026-03", weekday=1, title="하이라이트")
+        self._club(admin_client, "2026-03", weekday=3, start_hour=14, end_hour=16, title="글로우")
+        r = admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-04"})
+        assert r.status_code == 200 and r.get_json()["copied"] == 2
+        assert self._titles(admin_client, "2026-04") == ["글로우", "하이라이트"]
+        # 원본은 그대로 남는다.
+        assert self._titles(admin_client, "2026-03") == ["글로우", "하이라이트"]
+
+    def test_copied_block_keeps_slot_and_facility(self, admin_client):
+        self._club(admin_client, "2026-03", facility_id=2, weekday=5,
+                   start_hour=13, end_hour=15, title="하이라이트")
+        admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-04"})
+        blocks = admin_client.get(f"{BASE}/admin/recurring-blocks").get_json()["blocks"]
+        new = next(b for b in blocks if b["month"] == "2026-04")
+        assert (new["facility_id"], new["weekday"], new["start_hour"], new["end_hour"]) == (2, 5, 13, 15)
+        assert new["kind"] == "club" and new["period_label"] == "2026년 4월"
+
+    def test_second_run_skips_duplicates(self, admin_client):
+        self._club(admin_client, "2026-03", title="하이라이트")
+        admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-04"})
+        r = admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-04"})
+        body = r.get_json()
+        assert body["copied"] == 0 and body["skipped"] == 1
+        assert self._titles(admin_client, "2026-04") == ["하이라이트"]
+
+    def test_only_copies_club_kind(self, admin_client):
+        self._club(admin_client, "2026-03", title="하이라이트")
+        # 같은 기간을 가진 프로그램 — 기수 단위라 달 복제 대상이 아니다.
+        admin_client.post(f"{BASE}/admin/recurring-blocks", json=block_payload(
+            kind="program", weekday=4, title="방송댄스반",
+            start_date="2026-03-01", end_date="2026-03-31"))
+        r = admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-04"})
+        assert r.get_json()["copied"] == 1
+        assert self._titles(admin_client, "2026-04") == ["하이라이트"]
+
+    def test_copied_block_actually_blocks_booking(self, client, admin_client):
+        wd = 1
+        tue = date_with_weekday(wd)
+        prev = tue.replace(day=1) - timedelta(days=1)      # 지난달
+        self._club(admin_client, month_of(prev), weekday=wd)
+        # 지난달 일정이라 이 날짜는 아직 비어 있다.
+        booked = f"{BASE}/facilities/1/booked-times?date={tue.isoformat()}"
+        assert client.get(booked).get_json() == []
+        # 이번 달로 복제하면 그 시간이 막힌다.
+        admin_client.post(self.URL, json={"from_month": month_of(prev),
+                                          "to_month": month_of(tue)})
+        assert client.get(booked).get_json() == [10, 11]
+        r = client.post(f"{BASE}/reservations", json=reservation_payload(
+            date=tue.isoformat(), facility_id=1, hours=[10]))
+        assert r.status_code == 400 and "정기" in r.get_json()["error"]
+
+    def test_empty_source_month(self, admin_client):
+        r = admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-04"})
+        assert r.status_code == 400 and "없습니다" in r.get_json()["error"]
+
+    def test_same_month_rejected(self, admin_client):
+        self._club(admin_client, "2026-03")
+        r = admin_client.post(self.URL, json={"from_month": "2026-03", "to_month": "2026-03"})
+        assert r.status_code == 400
+
+    def test_bad_month_format(self, admin_client):
+        r = admin_client.post(self.URL, json={"from_month": "2026년 3월", "to_month": "2026-04"})
+        assert r.status_code == 400
+
+    def test_requires_login(self, client):
+        assert client.post(self.URL, json={"from_month": "2026-03",
+                                           "to_month": "2026-04"}).status_code == 401
