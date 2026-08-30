@@ -30,7 +30,13 @@ COPY . .
 #   compose 가 /app/static 에 NAS 폴더를 마운트하면 이미지 안의 static/img 가
 #   통째로 가려진다. 첫 배포에는 그 폴더가 비어 있으므로 기본 시설 사진이
 #   전부 404 가 된다. 엔트리포인트가 이 원본에서 한 번 채워 넣는다.
-RUN cp -r /app/static /app/static-seed \
+# 셸 스크립트의 CRLF 를 털어낸다. 윈도우에서 만든 폴더를 File Station 으로
+#   올리면 `#!/bin/sh\r` 이 되어 커널이 `/bin/sh\r` 를 찾다 실패하고, 컨테이너는
+#   **로그를 한 줄도 남기지 않고** 즉시 죽는다(원인이 안 보이는 실패). 저장소에는
+#   .gitattributes 로 LF 를 고정해 두었지만, 파일이 어떤 경로로 들어오든
+#   이미지가 스스로 정상화하도록 여기서 한 번 더 막는다.
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh \
+ && cp -r /app/static /app/static-seed \
  && chmod +x /app/docker-entrypoint.sh /app/scripts/backup.py
 
 EXPOSE 5025

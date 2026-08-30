@@ -1,0 +1,39 @@
+# 줄바꿈 정책 — 컨테이너 배포가 깨지지 않게 하기 위한 파일.
+#
+# 윈도우에서 작업하면 git 이 체크아웃할 때 CRLF 로 바꿔놓는다(core.autocrlf).
+# 그 상태의 폴더를 그대로 NAS 에 올려 컨테이너를 띄우면:
+#
+#   - docker-entrypoint.sh 의 shebang 이 `#!/bin/sh\r` 이 되어 커널이
+#     `/bin/sh\r` 를 찾다 실패한다. 컨테이너는 exec 단계에서 즉시 죽고
+#     **로그를 한 줄도 남기지 않는다** → Container Manager 에서는 원인이
+#     보이지 않는 빌드/실행 실패처럼 보인다.
+#   - .env 의 값 끝에 \r 이 붙는다. FORCE_HTTPS 가 "true\r" 가 되어 꺼지거나,
+#     비밀번호 끝에 \r 이 섞여 로그인이 안 되는 식으로 조용히 어긋난다.
+#
+# 그래서 컨테이너 안에서 실행·파싱되는 파일은 플랫폼과 무관하게 LF 로 고정한다.
+
+# 저장소에는 항상 LF 로 저장(작업 트리는 아래 지정이 없으면 플랫폼 기본값).
+* text=auto
+
+# --- 컨테이너에서 실행/파싱되는 파일: 작업 트리에서도 LF 강제 ---------------
+*.sh                 text eol=lf
+Dockerfile           text eol=lf
+.dockerignore        text eol=lf
+docker-compose.yml   text eol=lf
+*.yml                text eol=lf
+*.yaml               text eol=lf
+Procfile             text eol=lf
+.env.example         text eol=lf
+gunicorn.conf.py     text eol=lf
+wsgi.py              text eol=lf
+scripts/*.py         text eol=lf
+
+# --- 바이너리: 변환 금지 -----------------------------------------------------
+*.jpg    binary
+*.jpeg   binary
+*.png    binary
+*.gif    binary
+*.webp   binary
+*.ico    binary
+*.pdf    binary
+*.sqlite3 binary

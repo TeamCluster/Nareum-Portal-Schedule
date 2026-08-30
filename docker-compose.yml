@@ -49,13 +49,13 @@ services:
       # 프로젝트 폴더 안(./data)에 두면 프로젝트를 지울 때 함께 사라질 수 있으므로,
       # 프로젝트 밖 독립된 폴더를 쓰는 편이 안전하다.
       #   예) /volume3/Nareum/2026Space/db
-      - /volume3/Nareum/2026Space/db:/app/db
+      - /volume3/Nareum/2026NRSpace/db:/app/db
       # 업로드된 시설 사진·기관 헤더 로고. 기본 시설 사진은 첫 실행 때
       # 엔트리포인트가 이미지 안의 원본에서 채워 넣는다.
-      - /volume3/Nareum/2026Space/static:/app/static
+      - /volume3/Nareum/2026NRSpace/static:/app/static
       # 백업 스냅샷. File Station 에서 바로 내려받을 수 있다.
       #   수동 실행:  docker exec nareum-backend python scripts/backup.py
-      - /volume3/Nareum/2026Space/backups:/backups
+      - /volume3/Nareum/2026NRSpace/backups:/backups
     healthcheck:
       # /api/health 는 FORCE_HTTPS 리다이렉트에서 예외라 컨테이너 안 평문 요청으로도 통과한다.
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5025/api/health', timeout=3).status==200 else 1)"]
